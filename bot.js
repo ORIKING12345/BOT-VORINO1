@@ -1,3 +1,15 @@
+const express = require('express');
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send('The bot is alive and running!');
+});
+
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
+});
+
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║          ULTIMATE DISCORD STAFF BOT — All 10 Systems                ║
 // ║                                                                      ║
