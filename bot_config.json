@@ -1,0 +1,21 @@
+{
+  "adminId": "1159560463261114539",
+  "staffRole": "1489313397462798518",
+  "botName": "Legacy Design | Bot",
+  "ticketSupportRole": "1489313397462798518",
+  "transcriptChannel": "1497536924624093266",
+  "ticketCategory": "1495059280242675916",
+  "verifyCorrectNumber": 21,
+  "verifyNumberPool": [
+    21,
+    27
+  ],
+  "verifiedRole": "1489038339612086282",
+  "antiLinkEnabled": true,
+  "antiLinkBypassRole": "1496094961479847977",
+  "feedbackChannel": "1504112127944691793",
+  "feedbackRole": "1490779090733760795",
+  "logChannel": "1497536924624093266",
+  "botLogo": "https://media.discordapp.net/attachments/1504091157620064337/1504112528962097183/fsdfvds.gif?ex=6a05cd73&is=6a047bf3&hm=5a21048b7cd39be609ec1ad27aed370a48c63494a23c862e9e3859d5862baf4c&=",
+  "welcomeChannel": "1497538017538347069"
+}
