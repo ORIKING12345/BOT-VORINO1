@@ -479,7 +479,7 @@ async function cmdTicketStats(i) {
     try { const m = await i.guild.members.fetch(uid); lines.push(`**${lines.length+1}.** ${m.user.tag} — **${count}** takes`); }
     catch { lines.push(`**${lines.length+1}.** <@${uid}> — **${count}** takes`); }
   }
-  await i.reply({ embeds: [infoEmbed('📊 Ticket Take Leaderboard', lines.join('\n'))], ephemeral: true });
+
 }
 
 // ══════════════════════════════════════════════════════
