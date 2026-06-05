@@ -391,7 +391,6 @@ async function openTicket(i, category) {
 
   const staffMention = cfg.ticketSupportRole ? `<@&${cfg.ticketSupportRole}>` : '@Staff';
   const btns = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('ticket_take').setLabel('✋ Take Ticket').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('ticket_close').setLabel('🔒 Close Ticket').setStyle(ButtonStyle.Danger),
   );
   await ch.send({
