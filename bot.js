@@ -880,9 +880,6 @@ async function onButton(i) {
     const counts = loadJSON(TICKET_COUNTS_FILE, {});
     counts[i.user.id] = (counts[i.user.id] ?? 0) + 1;
     saveJSON(TICKET_COUNTS_FILE, counts);
-    await i.reply({ embeds: [okEmbed('✋ Ticket Taken', `${i.user} has taken this ticket!\n📊 Total takes: **${counts[i.user.id]}**`)] });
-    await sendLog(i.guild, okEmbed('✋ Ticket Taken', `**Staff:** ${i.user}\n**Channel:** ${i.channel}\n**Total:** ${counts[i.user.id]}`));
-    return;
   }
   if (id === 'ticket_close')  return cmdCloseTicket(i);
   if (id === 'ticket_claim') {
