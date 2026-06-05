@@ -124,7 +124,6 @@ const commands = [
   new SlashCommandBuilder().setName('team-panel').setDescription('🛡️ Send the staff team control panel'),
   // Tickets
   new SlashCommandBuilder().setName('ticket-panel').setDescription('📨 Post the ticket creation panel here'),
-  new SlashCommandBuilder().setName('ticket-stats').setDescription('📊 View ticket take leaderboard'),
   new SlashCommandBuilder().setName('close-ticket').setDescription('🔒 Close and archive this ticket'),
   new SlashCommandBuilder().setName('add-user').setDescription('➕ Add a member to this ticket')
     .addUserOption(o => o.setName('user').setDescription('Member').setRequired(true)),
