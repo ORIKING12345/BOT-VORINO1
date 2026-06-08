@@ -129,9 +129,6 @@ const commands = [
     .addUserOption(o => o.setName('user').setDescription('Member').setRequired(true)),
   new SlashCommandBuilder().setName('remove-user').setDescription('➖ Remove a member from this ticket')
     .addUserOption(o => o.setName('user').setDescription('Member').setRequired(true)),
-  // Verification
-  new SlashCommandBuilder().setName('verify-panel').setDescription('✅ Post the verification panel here'),
-  new SlashCommandBuilder().setName('auto-verify-all').setDescription('⚡ Give verified role to all members instantly'),
   // Messages
   new SlashCommandBuilder().setName('send-message').setDescription('📣 Send a rich embed message to any channel')
     .addChannelOption(o => o.setName('channel').setDescription('Target channel').setRequired(true))
@@ -481,76 +478,6 @@ async function cmdTicketStats(i) {
 
 }
 
-// ══════════════════════════════════════════════════════
-//  SYSTEM 2 — VERIFICATION
-// ══════════════════════════════════════════════════════
-function getVerifyNumbers() {
-  const cfg = getCFG();
-  const correct = cfg.verifyCorrectNumber ?? 37;
-  const pool = cfg.verifyNumberPool ?? [7, 12, 22, 37, 43, 55, 68, 81, 91, 99];
-  const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, 7);
-  if (!shuffled.includes(correct)) shuffled[Math.floor(Math.random() * shuffled.length)] = correct;
-  return { correct, numbers: shuffled.sort((a, b) => a - b) };
-}
-
-async function cmdVerifyPanel(i) {
-  const { numbers } = getVerifyNumbers();
-  const e = infoEmbed(
-    '🔐 Server Verification',
-    '**Verify yourself to gain full server access.**\n\n' +
-    '📋 **How to verify:**\n' +
-    '1. Click the **Verify Me** button below\n' +
-    '4. If correct, you\'ll receive the Verified role instantly\n\n' +
-    '⚠️ Only one number is correct — choose carefully!'
-  );
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('verify_begin').setLabel('🔐 Verify Me').setStyle(ButtonStyle.Success)
-  );
-  await i.channel.send({ embeds: [e], components: [row] });
-  await i.reply({ embeds: [okEmbed('✅ Done', 'Verification panel posted.')], ephemeral: true });
-}
-
-async function cmdAutoVerifyAll(i) {
-  await i.deferReply({ ephemeral: true });
-  const cfg = getCFG();
-  if (!cfg.verifiedRole) return i.editReply({ embeds: [errEmbed('❌ No Role', 'Set the verified role in /setup first.')] });
-  const members = await i.guild.members.fetch();
-  let count = 0;
-  for (const [, m] of members) {
-    if (m.user.bot || m.roles.cache.has(cfg.verifiedRole)) continue;
-    try { await m.roles.add(cfg.verifiedRole); count++; } catch {}
-  }
-  await i.editReply({ embeds: [okEmbed('⚡ Auto-Verify Done', `**${count}** members have been verified.`)] });
-  await sendLog(i.guild, okEmbed('⚡ Auto-Verify All', `${i.user} verified **${count}** members.`));
-}
-
-async function beginVerification(i) {
-  const cfg = getCFG();
-  if (cfg.verifiedRole && i.member.roles.cache.has(cfg.verifiedRole))
-    return i.reply({ embeds: [okEmbed('✅ Already Verified', 'You are already verified!')], ephemeral: true });
-  const { numbers } = getVerifyNumbers();
-  const row = new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder().setCustomId('verify_pick_number').setPlaceholder('🔢 Pick the correct number...')
-      .addOptions(numbers.map(n => ({ label: String(n), value: String(n) })))
-  );
-  await i.reply({
-    embeds: [infoEmbed('🔢 Select the Correct Number',
-      `Choose the correct number from the dropdown below to complete verification.\n\n` +
-      `Numbers: **${numbers.join(' · ')}**\n\n⚠️ Only one attempt — pick wisely!`)],
-    components: [row], ephemeral: true
-  });
-}
-
-async function handleVerifyPick(i) {
-  const cfg = getCFG();
-  if (String(getCFG().verifyCorrectNumber ?? 37) === i.values[0]) {
-    if (cfg.verifiedRole) try { await i.member.roles.add(cfg.verifiedRole); } catch {}
-    await i.update({ embeds: [okEmbed('✅ Verified!', '🎉 Correct! You now have full access to the server.\n\nWelcome!')], components: [] });
-    await sendLog(i.guild, okEmbed('✅ Verified', `${i.user} (${i.user.id}) passed verification.`));
-  } else {
-    await i.update({ embeds: [errEmbed('❌ Wrong Number', 'That was not the correct number.\nClick **Verify Me** again to try once more.')], components: [] });
-  }
-}
 
 // ══════════════════════════════════════════════════════
 //  SYSTEM 3 — SEND MESSAGE
