@@ -768,7 +768,7 @@ async function cmdTeamPanel(i) {
   );
   const r1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('team_ticket_panel').setLabel('🎫 Ticket Panel').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('team_verify_panel').setLabel('✅ Verify Panel').setStyle(ButtonStyle.Success),
+    .setLabel('✅ Verify Panel').setStyle(ButtonStyle.Success),
 
     new ButtonBuilder().setCustomId('team_server_stats').setLabel('📊 Stats').setStyle(ButtonStyle.Secondary),
   );
@@ -812,7 +812,6 @@ async function onButton(i) {
     if (!isStaff(i.member)) return i.reply({ embeds: [errEmbed('❌ Staff Only', 'Only staff can claim tickets.')], ephemeral: true });
     return i.reply({ embeds: [infoEmbed('👤 Claimed', `${i.user} has claimed this ticket and will handle it.`)] });
   }
-  if (id === 'verify_begin') return beginVerification(i);
   if (id === 'lottery_enter') {
     const data = loadJSON(LOTTERY_FILE, {});
     if (data.ended) return i.reply({ embeds: [errEmbed('❌ Ended', 'This lottery has ended.')], ephemeral: true });
@@ -907,7 +906,7 @@ async function handleSetupMenu(i, action) {
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('transcript_ch').setLabel('Transcript Channel ID').setStyle(TextInputStyle.Short).setValue(cfg.transcriptChannel || '').setRequired(false)),
       ); return m;
     },
-    setup_verify: () => {
+    : () => {
       const cfg = getCFG();
       const m = new ModalBuilder().setCustomId('modal_verify').setTitle('✅ Verification Settings');
       m.addComponents(
