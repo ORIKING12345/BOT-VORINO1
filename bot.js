@@ -279,7 +279,7 @@ async function onSlash(i) {
     'setup': cmdSetup, 'botinfo': cmdBotInfo, 'team-panel': cmdTeamPanel,
     'ticket-panel': cmdTicketPanel, 'ticket-stats': cmdTicketStats,
     'close-ticket': cmdCloseTicket, 'add-user': cmdAddUser, 'remove-user': cmdRemoveUser,
-    'verify-panel': cmdVerifyPanel, 'auto-verify-all': cmdAutoVerifyAll,
+
     'send-message': cmdSendMessage, 'dmall': cmdDmAll,
     'lottery-start': cmdLotteryStart, 'lottery-end': cmdLotteryEnd, 'lottery-reroll': cmdLotteryReroll,
     'drop-start': cmdDropStart,
@@ -769,7 +769,7 @@ async function cmdTeamPanel(i) {
   const r1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('team_ticket_panel').setLabel('🎫 Ticket Panel').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('team_verify_panel').setLabel('✅ Verify Panel').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId('team_auto_verify').setLabel('⚡ Auto-Verify All').setStyle(ButtonStyle.Success),
+
     new ButtonBuilder().setCustomId('team_server_stats').setLabel('📊 Stats').setStyle(ButtonStyle.Secondary),
   );
   const r2 = new ActionRowBuilder().addComponents(
