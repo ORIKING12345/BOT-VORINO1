@@ -11,7 +11,7 @@ app.listen(port, () => {
 });
 
 // ╔══════════════════════════════════════════════════════════════════════╗
-// ║          ULTIMATE DISCORD STAFF BOT — All 10 Systems                ║
+// ║          ULTIMATE DISCORD STAFF BOT                                  ║
 // ║                                                                      ║
 // ║  ✅ Only 3 things to fill in: TOKEN, CLIENT_ID, GUILD_ID            ║
 // ║  ✅ All roles & channels are set via /setup or the Admin Panel       ║
@@ -96,23 +96,6 @@ function isStaff(member) {
   if (isAdmin(member)) return true;
   const cfg = getCFG();
   return cfg.staffRole ? member.roles.cache.has(cfg.staffRole) : member.permissions.has(PermissionFlagsBits.ManageMessages);
-}
-function hasRoleCfg(member, key) {
-  if (isAdmin(member)) return true;
-  const cfg = getCFG();
-  return cfg[key] ? member.roles.cache.has(cfg[key]) || isStaff(member) : isStaff(member);
-}
-
-// ──────────────────────────────────────────────────────
-//  LOG HELPER
-// ──────────────────────────────────────────────────────
-async function sendLog(guild, emb) {
-  try {
-    const cfg = getCFG();
-    if (!cfg.logChannel) return;
-    const ch = guild.channels.cache.get(cfg.logChannel);
-    if (ch) await ch.send({ embeds: [emb] });
-  } catch {}
 }
 
 // ══════════════════════════════════════════════════════
@@ -200,11 +183,11 @@ client.once('ready', async () => {
   else              console.log(`👑 Admin: ${cfg.adminId}`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   await registerCommands();
-  client.user.setActivity('🛡️ Legacy Design Bot create by vorino', { type: 3 });
+  client.user.setActivity('🛡️ Legacy Design Bot created by vorino', { type: 3 });
 });
 
 // ══════════════════════════════════════════════════════
-//  SYSTEM 9 — WELCOME  (auto on join)
+//  SYSTEM — WELCOME  (auto on join)
 // ══════════════════════════════════════════════════════
 client.on('guildMemberAdd', async member => {
   try {
@@ -230,7 +213,7 @@ client.on('guildMemberAdd', async member => {
 });
 
 // ══════════════════════════════════════════════════════
-//  SYSTEM 8 — ANTI-LINK
+//  SYSTEM — ANTI-LINK
 // ══════════════════════════════════════════════════════
 const LINK_RE = /(https?:\/\/|discord\.gg\/|www\.)\S+/gi;
 client.on('messageCreate', async msg => {
@@ -247,8 +230,6 @@ client.on('messageCreate', async msg => {
     await member.timeout(5 * 60 * 1000, 'Sent a link without permission');
     const w = await msg.channel.send({ embeds: [errEmbed('🔗 Anti-Link', `${member} — links are not permitted here.\n⏰ You have been timed out for **5 minutes**.`)] });
     setTimeout(() => w.delete().catch(() => {}), 7000);
-    await sendLog(msg.guild, makeEmbed('🔗 Anti-Link Triggered',
-      `**User:** ${member} (${member.id})\n**Channel:** ${msg.channel}\n**Content:** \`${msg.content.slice(0, 300)}\``, 0xFF4444));
   } catch {}
 });
 
@@ -277,9 +258,8 @@ async function onSlash(i) {
     return i.reply({ embeds: [errEmbed('❌ Access Denied', 'You need the staff role to use this command.')], ephemeral: true });
   const map = {
     'setup': cmdSetup, 'botinfo': cmdBotInfo, 'team-panel': cmdTeamPanel,
-    'ticket-panel': cmdTicketPanel, 'ticket-stats': cmdTicketStats,
+    'ticket-panel': cmdTicketPanel,
     'close-ticket': cmdCloseTicket, 'add-user': cmdAddUser, 'remove-user': cmdRemoveUser,
-
     'send-message': cmdSendMessage, 'dmall': cmdDmAll,
     'lottery-start': cmdLotteryStart, 'lottery-end': cmdLotteryEnd, 'lottery-reroll': cmdLotteryReroll,
     'drop-start': cmdDropStart,
@@ -295,7 +275,6 @@ async function onSlash(i) {
 // ══════════════════════════════════════════════════════
 async function cmdSetup(i) {
   const cfg = getCFG();
-  // First run: anyone with Administrator can claim admin
   if (!cfg.adminId) {
     if (!i.member.permissions.has(PermissionFlagsBits.Administrator))
       return i.reply({ embeds: [errEmbed('❌ Setup Required', 'A server Administrator must run /setup first to claim admin.')], ephemeral: true });
@@ -320,8 +299,6 @@ async function cmdSetup(i) {
         { label: '🤖 Bot Name & Logo',         value: 'setup_branding',    emoji: '🤖', description: 'Display name and logo URL' },
         { label: '🛡️ Staff Role',              value: 'setup_staffrole',   emoji: '🛡️', description: 'Role that can use bot commands' },
         { label: '🎫 Ticket Settings',        value: 'setup_tickets',     emoji: '🎫', description: 'Support role, category, transcripts' },
-        { label: '✅ Verification Settings',  value: 'setup_verify',      emoji: '✅', description: 'Verified role and secret number' },
-        { label: '📋 Log Channel',            value: 'setup_log',         emoji: '📋', description: 'Where to send mod logs' },
         { label: '👋 Welcome Channel',        value: 'setup_welcome',     emoji: '👋', description: 'Where to send welcome messages' },
         { label: '💬 Feedback Settings',     value: 'setup_feedback',    emoji: '💬', description: 'Channel and allowed role' },
         { label: '🔗 Anti-Link Settings',    value: 'setup_antilink',    emoji: '🔗', description: 'Enable/disable anti-link' },
@@ -400,7 +377,6 @@ async function openTicket(i, category) {
   });
 
   await i.editReply({ embeds: [okEmbed('✅ Ticket Created', `Your ticket has been opened: ${ch}`)] });
-  await sendLog(i.guild, okEmbed('🎫 Ticket Opened', `**User:** ${i.user}\n**Channel:** ${ch}\n**Category:** ${labels[category]}`));
 }
 
 async function cmdCloseTicket(i) {
@@ -443,8 +419,6 @@ async function cmdCloseTicket(i) {
       saveJSON(OPEN_TICKETS_FILE, openTickets);
     }
 
-    await sendLog(i.guild, makeEmbed('🔒 Ticket Closed',
-      `**Channel:** ${i.channel.name}\n**Closed by:** ${i.user}\n**Owner:** ${ownerId ? `<@${ownerId}>` : 'Unknown'}`, 0xED4245));
     setTimeout(() => i.channel.delete().catch(() => {}), 4000);
   } catch (err) {
     console.error('Close ticket error:', err);
@@ -464,23 +438,8 @@ async function cmdRemoveUser(i) {
   await i.reply({ embeds: [okEmbed('✅ Removed', `${user} has been removed from this ticket.`)] });
 }
 
-async function cmdTicketStats(i) {
-  const counts = loadJSON(TICKET_COUNTS_FILE, {});
-  if (!Object.keys(counts).length)
-    return i.reply({ embeds: [infoEmbed('📊 Ticket Stats', 'No tickets have been taken yet.')], ephemeral: true });
-
-  const sorted = Object.entries(counts).sort(([,a],[,b]) => b - a);
-  const lines = [];
-  for (const [uid, count] of sorted) {
-    try { const m = await i.guild.members.fetch(uid); lines.push(`**${lines.length+1}.** ${m.user.tag} — **${count}** takes`); }
-    catch { lines.push(`**${lines.length+1}.** <@${uid}> — **${count}** takes`); }
-  }
-
-}
-
-
 // ══════════════════════════════════════════════════════
-//  SYSTEM 3 — SEND MESSAGE
+//  SYSTEM — SEND MESSAGE
 // ══════════════════════════════════════════════════════
 async function cmdSendMessage(i) {
   const ch       = i.options.getChannel('channel');
@@ -501,7 +460,7 @@ async function cmdSendMessage(i) {
 }
 
 // ══════════════════════════════════════════════════════
-//  SYSTEM 4 — DM ALL
+//  SYSTEM — DM ALL
 // ══════════════════════════════════════════════════════
 async function cmdDmAll(i) {
   await i.deferReply({ ephemeral: true });
@@ -525,7 +484,7 @@ async function cmdDmAll(i) {
 }
 
 // ══════════════════════════════════════════════════════
-//  SYSTEM 5A — LOTTERY
+//  SYSTEM — LOTTERY
 // ══════════════════════════════════════════════════════
 async function cmdLotteryStart(i) {
   const prize   = i.options.getString('prize');
@@ -562,7 +521,6 @@ async function doLotteryEnd(guild, msg, data) {
   data.lastWinner = winnerId; saveJSON(LOTTERY_FILE, data);
   if (ch) await ch.send({ content: `🎉 <@${winnerId}>`, embeds: [goldEmbed('🎉 Lottery Winner!', `**Prize:** ${data.prize}\n\nCongratulations <@${winnerId}>! Please contact a staff member to claim.`)] });
   try { if (msg) await msg.edit({ components: [] }); } catch {}
-  await sendLog(guild, goldEmbed('🎰 Lottery Ended', `**Prize:** ${data.prize}\n**Winner:** <@${winnerId}>\n**Entries:** ${data.entries.length}`));
 }
 
 async function cmdLotteryEnd(i) {
@@ -583,7 +541,7 @@ async function cmdLotteryReroll(i) {
 }
 
 // ══════════════════════════════════════════════════════
-//  SYSTEM 5B — DROP
+//  SYSTEM — DROP
 // ══════════════════════════════════════════════════════
 async function cmdDropStart(i) {
   const prize   = i.options.getString('prize');
@@ -616,28 +574,11 @@ async function handleDropClaim(i) {
       if (msg) await msg.edit({ components: [] });
       await ch.send({ embeds: [goldEmbed('🎁 Drop Fully Claimed!', `**Winners:** ${mentions}\n**Prize:** ${data.prize}`)] });
     }
-    await sendLog(i.guild, goldEmbed('🎁 Drop Claimed', `**Prize:** ${data.prize}\n**Winners:** ${mentions}`));
   }
 }
 
 // ══════════════════════════════════════════════════════
-//  SYSTEM 6 — AUTO LOGS
-// ══════════════════════════════════════════════════════
-client.on('guildBanAdd',    async ban    => sendLog(ban.guild,    makeEmbed('🔨 Member Banned',   `**User:** ${ban.user.tag} (${ban.user.id})\n**Reason:** ${ban.reason || 'No reason provided'}`, 0xED4245)));
-client.on('guildBanRemove', async ban    => sendLog(ban.guild,    okEmbed('🔓 Member Unbanned',    `**User:** ${ban.user.tag} (${ban.user.id})`)));
-client.on('guildMemberRemove', async m  => sendLog(m.guild,      warnEmbed('👋 Member Left',       `**User:** ${m.user.tag} (${m.user.id})`)));
-client.on('guildMemberAdd',    async m  => sendLog(m.guild,      okEmbed('✨ Member Joined',       `**User:** ${m.user.tag} (${m.user.id})\n**Account Age:** <t:${Math.floor(m.user.createdTimestamp/1000)}:D>`)));
-client.on('messageDelete', async msg => {
-  if (!msg.guild || msg.author?.bot) return;
-  sendLog(msg.guild, warnEmbed('🗑️ Message Deleted', `**Author:** ${msg.author?.tag || 'Unknown'}\n**Channel:** ${msg.channel}\n**Content:**\n\`\`\`${(msg.content || '[no content]').slice(0, 800)}\`\`\``));
-});
-client.on('messageUpdate', async (o, n) => {
-  if (!o.guild || o.author?.bot || o.content === n.content) return;
-  sendLog(o.guild, warnEmbed('✏️ Message Edited', `**Author:** ${o.author?.tag}\n**Channel:** ${o.channel}\n**Before:** ${(o.content||'').slice(0,400)}\n**After:** ${(n.content||'').slice(0,400)}`));
-});
-
-// ══════════════════════════════════════════════════════
-//  SYSTEM 7 — MODERATION
+//  SYSTEM — MODERATION
 // ══════════════════════════════════════════════════════
 async function cmdBan(i) {
   const user = i.options.getUser('user'), reason = i.options.getString('reason') ?? 'No reason provided';
@@ -646,7 +587,6 @@ async function cmdBan(i) {
   try {
     await m.ban({ reason });
     await i.reply({ embeds: [makeEmbed('🔨 Banned', `**User:** ${user.tag}\n**Reason:** ${reason}`, 0xED4245)] });
-    await sendLog(i.guild, makeEmbed('🔨 Ban', `**User:** ${user.tag} (${user.id})\n**Moderator:** ${i.user}\n**Reason:** ${reason}`, 0xED4245));
   } catch { i.reply({ embeds: [errEmbed('❌ Failed', 'Could not ban. Check role hierarchy.')], ephemeral: true }); }
 }
 
@@ -655,7 +595,6 @@ async function cmdUnban(i) {
   try {
     await i.guild.bans.remove(uid);
     await i.reply({ embeds: [okEmbed('🔓 Unbanned', `User \`${uid}\` has been unbanned.`)] });
-    await sendLog(i.guild, okEmbed('🔓 Unban', `**User ID:** ${uid}\n**Moderator:** ${i.user}`));
   } catch { i.reply({ embeds: [errEmbed('❌ Failed', 'Could not unban. Check the user ID.')], ephemeral: true }); }
 }
 
@@ -666,7 +605,6 @@ async function cmdKick(i) {
   try {
     await m.kick(reason);
     await i.reply({ embeds: [warnEmbed('👢 Kicked', `**User:** ${user.tag}\n**Reason:** ${reason}`)] });
-    await sendLog(i.guild, warnEmbed('👢 Kick', `**User:** ${user.tag} (${user.id})\n**Moderator:** ${i.user}\n**Reason:** ${reason}`));
   } catch { i.reply({ embeds: [errEmbed('❌ Failed', 'Could not kick.')], ephemeral: true }); }
 }
 
@@ -677,7 +615,6 @@ async function cmdTimeout(i) {
   try {
     await m.timeout(mins * 60000, reason);
     await i.reply({ embeds: [warnEmbed('⏰ Timed Out', `**User:** ${user.tag}\n**Duration:** ${mins} min\n**Reason:** ${reason}`)] });
-    await sendLog(i.guild, warnEmbed('⏰ Timeout', `**User:** ${user.tag} (${user.id})\n**Moderator:** ${i.user}\n**Duration:** ${mins}m\n**Reason:** ${reason}`));
   } catch { i.reply({ embeds: [errEmbed('❌ Failed', 'Could not timeout.')], ephemeral: true }); }
 }
 
@@ -693,11 +630,10 @@ async function cmdWarn(i) {
   const user = i.options.getUser('user'), reason = i.options.getString('reason');
   try { await user.send({ embeds: [warnEmbed('⚠️ Warning', `You received a warning in **${i.guild.name}**.\n\n**Reason:** ${reason}\n\nPlease follow the server rules.`)] }); } catch {}
   await i.reply({ embeds: [warnEmbed('⚠️ Warned', `**User:** ${user.tag}\n**Reason:** ${reason}`)] });
-  await sendLog(i.guild, warnEmbed('⚠️ Warn', `**User:** ${user.tag} (${user.id})\n**Moderator:** ${i.user}\n**Reason:** ${reason}`));
 }
 
 // ══════════════════════════════════════════════════════
-//  SYSTEM 10 — FEEDBACK
+//  SYSTEM — FEEDBACK
 // ══════════════════════════════════════════════════════
 async function cmdFeedback(i) {
   const cfg = getCFG();
@@ -741,11 +677,7 @@ async function cmdBotInfo(i) {
     `Support Role: ${cfg.ticketSupportRole ? `<@&${cfg.ticketSupportRole}>` : 'Not set'}\n` +
     `Ticket Category: ${cfg.ticketCategory ? `\`${cfg.ticketCategory}\`` : 'Not set'}\n` +
     `Transcript Channel: ${cfg.transcriptChannel ? `<#${cfg.transcriptChannel}>` : 'Not set'}\n\n` +
-    `**— Verification —**\n` +
-    `Verified Role: ${cfg.verifiedRole ? `<@&${cfg.verifiedRole}>` : 'Not set'}\n` +
-    `Correct Number: \`${cfg.verifyCorrectNumber ?? 37}\`\n\n` +
     `**— Channels —**\n` +
-    `Log: ${cfg.logChannel ? `<#${cfg.logChannel}>` : 'Not set'}\n` +
     `Welcome: ${cfg.welcomeChannel ? `<#${cfg.welcomeChannel}>` : 'Not set'}\n` +
     `Feedback: ${cfg.feedbackChannel ? `<#${cfg.feedbackChannel}>` : 'Not set'}\n\n` +
     `**— Anti-Link —**\n` +
@@ -768,8 +700,6 @@ async function cmdTeamPanel(i) {
   );
   const r1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('team_ticket_panel').setLabel('🎫 Ticket Panel').setStyle(ButtonStyle.Primary),
-    .setLabel('✅ Verify Panel').setStyle(ButtonStyle.Success),
-
     new ButtonBuilder().setCustomId('team_server_stats').setLabel('📊 Stats').setStyle(ButtonStyle.Secondary),
   );
   const r2 = new ActionRowBuilder().addComponents(
@@ -801,12 +731,6 @@ async function cmdTeamPanel(i) {
 async function onButton(i) {
   const id = i.customId;
 
-  if (id === 'ticket_take') {
-    if (!isStaff(i.member)) return i.reply({ embeds: [errEmbed('❌ Staff Only', 'Only staff can take tickets.')], ephemeral: true });
-    const counts = loadJSON(TICKET_COUNTS_FILE, {});
-    counts[i.user.id] = (counts[i.user.id] ?? 0) + 1;
-    saveJSON(TICKET_COUNTS_FILE, counts);
-  }
   if (id === 'ticket_close')  return cmdCloseTicket(i);
   if (id === 'ticket_claim') {
     if (!isStaff(i.member)) return i.reply({ embeds: [errEmbed('❌ Staff Only', 'Only staff can claim tickets.')], ephemeral: true });
@@ -826,9 +750,14 @@ async function onButton(i) {
   }
   if (id === 'drop_claim')           return handleDropClaim(i);
   if (id === 'team_ticket_panel')    return cmdTicketPanel(i);
-  if (id === 'team_verify_panel')    return cmdVerifyPanel(i);
-  if (id === 'team_auto_verify')     return cmdAutoVerifyAll(i);
-  if (id === 'team_ticket_stats')    return cmdTicketStats(i);
+  if (id === 'team_ticket_stats') {
+    const counts = loadJSON(TICKET_COUNTS_FILE, {});
+    if (!Object.keys(counts).length)
+      return i.reply({ embeds: [infoEmbed('📊 Ticket Stats', 'No ticket stats yet.')], ephemeral: true });
+    const sorted = Object.entries(counts).sort(([,a],[,b]) => b - a);
+    const lines = sorted.map(([uid, count], idx) => `**${idx+1}.** <@${uid}> — **${count}** takes`);
+    return i.reply({ embeds: [infoEmbed('📈 Ticket Stats', lines.join('\n'))], ephemeral: true });
+  }
   if (id === 'team_open_setup')      return cmdSetup(i);
   if (id === 'team_toggle_antilink') {
     const cfg = getCFG(); const val = !cfg.antiLinkEnabled; setCFG('antiLinkEnabled', val);
@@ -856,7 +785,6 @@ async function onButton(i) {
 async function onSelect(i) {
   const id = i.customId, val = i.values[0];
   if (id === 'ticket_open_category') return openTicket(i, val);
-  if (id === 'verify_pick_number')   return handleVerifyPick(i);
   if (id === 'setup_menu')           return handleSetupMenu(i, val);
   if (id === 'team_quick_action') {
     if (val === 'end_lottery')    return cmdLotteryEnd(i);
@@ -868,7 +796,7 @@ async function onSelect(i) {
 }
 
 // ══════════════════════════════════════════════════════
-//  SETUP MENU — opens the right modal for each setting
+//  SETUP MENU
 // ══════════════════════════════════════════════════════
 async function handleSetupMenu(i, action) {
   if (!isAdmin(i.member))
@@ -905,21 +833,6 @@ async function handleSetupMenu(i, action) {
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ticket_category').setLabel('Ticket Category ID').setStyle(TextInputStyle.Short).setValue(cfg.ticketCategory || '').setRequired(false)),
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('transcript_ch').setLabel('Transcript Channel ID').setStyle(TextInputStyle.Short).setValue(cfg.transcriptChannel || '').setRequired(false)),
       ); return m;
-    },
-    : () => {
-      const cfg = getCFG();
-      const m = new ModalBuilder().setCustomId('modal_verify').setTitle('✅ Verification Settings');
-      m.addComponents(
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('verified_role').setLabel('Verified Role ID').setStyle(TextInputStyle.Short).setValue(cfg.verifiedRole || '').setRequired(false)),
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('correct_num').setLabel('Correct Number (the secret answer)').setStyle(TextInputStyle.Short).setValue(String(cfg.verifyCorrectNumber ?? 37)).setRequired(true)),
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('num_pool').setLabel('Number Pool (comma-separated list)').setStyle(TextInputStyle.Short).setValue((cfg.verifyNumberPool || [7,12,22,37,43,55,68,81,91,99]).join(',')).setRequired(true)),
-      ); return m;
-    },
-    setup_log: () => {
-      const m = new ModalBuilder().setCustomId('modal_log').setTitle('📋 Log Channel');
-      m.addComponents(new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('log_channel').setLabel('Log Channel ID').setStyle(TextInputStyle.Short).setValue(getCFG().logChannel || '').setRequired(true)
-      )); return m;
     },
     setup_welcome: () => {
       const m = new ModalBuilder().setCustomId('modal_welcome').setTitle('👋 Welcome Channel');
@@ -974,17 +887,6 @@ async function onModal(i) {
     if (sr) d.ticketSupportRole = sr; if (cat) d.ticketCategory = cat; if (tr) d.transcriptChannel = tr;
     saveCFG(d);
     return i.reply({ embeds: [okEmbed('✅ Ticket Settings Saved', 'Ticket configuration updated.')], ephemeral: true });
-  }
-  if (id === 'modal_verify') {
-    const d = loadCFG();
-    const role = get('verified_role'), num = parseInt(get('correct_num')), pool = get('num_pool').split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n));
-    if (role) d.verifiedRole = role; if (!isNaN(num)) d.verifyCorrectNumber = num; if (pool.length) d.verifyNumberPool = pool;
-    saveCFG(d);
-    return i.reply({ embeds: [okEmbed('✅ Verification Saved', `Correct number: **${num}**\nPool: **${pool.join(', ')}**`)], ephemeral: true });
-  }
-  if (id === 'modal_log') {
-    setCFG('logChannel', get('log_channel'));
-    return i.reply({ embeds: [okEmbed('✅ Log Channel Set', `Logs → <#${getCFG().logChannel}>`)], ephemeral: true });
   }
   if (id === 'modal_welcome') {
     setCFG('welcomeChannel', get('welcome_channel'));
