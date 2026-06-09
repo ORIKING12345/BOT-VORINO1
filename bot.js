@@ -149,7 +149,6 @@ const commands = [
     .addStringOption(o => o.setName('reason').setDescription('Reason')),
   new SlashCommandBuilder().setName('untimeout').setDescription('✅ Remove a member\'s timeout')
     .addUserOption(o => o.setName('user').setDescription('Member').setRequired(true)),
-  new SlashCommandBuilder().setName('warn').setDescription('⚠️ Warn a member')
     .addUserOption(o => o.setName('user').setDescription('Member').setRequired(true))
     .addStringOption(o => o.setName('reason').setDescription('Reason').setRequired(true)),
   // Feedback
