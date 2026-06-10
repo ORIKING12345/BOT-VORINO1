@@ -1,3 +1,4 @@
+cat > /home/claude/bot.js << 'ENDOFFILE'
 const express = require('express');
 const app = express();
 const port = process.env.PORT || 3000;
@@ -17,6 +18,8 @@ app.listen(port, () => {
 // ║  ✅ All roles & channels are set via /setup or the Admin Panel       ║
 // ║  ✅ Admin is set automatically the first time /setup is run          ║
 // ║  ✅ Only the admin can change settings in the team panel             ║
+// ║  ✅ Verification system — button gives role                          ║
+// ║  ✅ Logs system — bans, kicks, timeouts, deletes, etc.               ║
 // ║                                                                      ║
 // ║  Install:  npm install discord.js                                    ║
 // ║  Run:      node bot.js                                               ║
@@ -36,6 +39,7 @@ const {
   StringSelectMenuBuilder, ModalBuilder, TextInputBuilder,
   TextInputStyle, PermissionFlagsBits, ChannelType,
   AttachmentBuilder, SlashCommandBuilder, REST, Routes,
+  AuditLogEvent,
 } = require('discord.js');
 const fs = require('fs');
 
@@ -62,7 +66,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent,
-    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildModeration,
   ],
   partials: [Partials.Channel, Partials.Message, Partials.GuildMember],
 });
@@ -96,6 +100,27 @@ function isStaff(member) {
   if (isAdmin(member)) return true;
   const cfg = getCFG();
   return cfg.staffRole ? member.roles.cache.has(cfg.staffRole) : member.permissions.has(PermissionFlagsBits.ManageMessages);
+}
+
+// ──────────────────────────────────────────────────────
+//  LOGS HELPER  →  sends a log embed to the log channel
+// ──────────────────────────────────────────────────────
+async function sendLog(guild, embedData) {
+  try {
+    const cfg = getCFG();
+    if (!cfg.logChannel) return;
+    const ch = guild.channels.cache.get(cfg.logChannel);
+    if (!ch) return;
+    const e = new EmbedBuilder()
+      .setTitle(embedData.title)
+      .setDescription(embedData.desc || null)
+      .setColor(embedData.color || 0x5865F2)
+      .setFooter({ text: cfg.botName || 'Staff Bot' })
+      .setTimestamp();
+    if (embedData.fields) e.addFields(embedData.fields);
+    if (embedData.thumbnail) e.setThumbnail(embedData.thumbnail);
+    await ch.send({ embeds: [e] });
+  } catch {}
 }
 
 // ══════════════════════════════════════════════════════
@@ -149,6 +174,7 @@ const commands = [
     .addStringOption(o => o.setName('reason').setDescription('Reason')),
   new SlashCommandBuilder().setName('untimeout').setDescription('✅ Remove a member\'s timeout')
     .addUserOption(o => o.setName('user').setDescription('Member').setRequired(true)),
+  new SlashCommandBuilder().setName('warn').setDescription('⚠️ Warn a member')
     .addUserOption(o => o.setName('user').setDescription('Member').setRequired(true))
     .addStringOption(o => o.setName('reason').setDescription('Reason').setRequired(true)),
   // Feedback
@@ -157,6 +183,8 @@ const commands = [
     .addIntegerOption(o => o.setName('rating').setDescription('Rating 1–5').setMinValue(1).setMaxValue(5).setRequired(true)),
   // Welcome test
   new SlashCommandBuilder().setName('welcome-test').setDescription('👋 Preview the welcome message'),
+  // ── NEW: Verification panel
+  new SlashCommandBuilder().setName('verify-panel').setDescription('✅ Send the verification panel here (Admin only)'),
 ].map(c => c.toJSON());
 
 // ──────────────────────────────────────────────────────
@@ -212,6 +240,179 @@ client.on('guildMemberAdd', async member => {
 });
 
 // ══════════════════════════════════════════════════════
+//  SYSTEM — AUTO-LOGS (audit log listeners)
+// ══════════════════════════════════════════════════════
+
+// Helper: fetch latest audit log entry of a given type
+async function getAuditEntry(guild, type, targetId, maxAgeMs = 5000) {
+  try {
+    const logs = await guild.fetchAuditLogs({ limit: 1, type });
+    const entry = logs.entries.first();
+    if (!entry) return null;
+    if (Date.now() - entry.createdTimestamp > maxAgeMs) return null;
+    if (targetId && entry.target?.id !== targetId) return null;
+    return entry;
+  } catch { return null; }
+}
+
+// ── BAN
+client.on('guildBanAdd', async ban => {
+  const entry = await getAuditEntry(ban.guild, AuditLogEvent.MemberBanAdd, ban.user.id);
+  await sendLog(ban.guild, {
+    title: '🔨 Member Banned',
+    color: 0xED4245,
+    thumbnail: ban.user.displayAvatarURL({ dynamic: true }),
+    fields: [
+      { name: '👤 User', value: `${ban.user} (${ban.user.tag})`, inline: true },
+      { name: '🆔 ID', value: ban.user.id, inline: true },
+      { name: '👮 By', value: entry?.executor ? `${entry.executor}` : 'Unknown', inline: true },
+      { name: '📝 Reason', value: entry?.reason || 'No reason provided', inline: false },
+    ],
+  });
+});
+
+// ── UNBAN
+client.on('guildBanRemove', async ban => {
+  const entry = await getAuditEntry(ban.guild, AuditLogEvent.MemberBanRemove, ban.user.id);
+  await sendLog(ban.guild, {
+    title: '🔓 Member Unbanned',
+    color: 0x57F287,
+    thumbnail: ban.user.displayAvatarURL({ dynamic: true }),
+    fields: [
+      { name: '👤 User', value: `${ban.user.tag}`, inline: true },
+      { name: '🆔 ID', value: ban.user.id, inline: true },
+      { name: '👮 By', value: entry?.executor ? `${entry.executor}` : 'Unknown', inline: true },
+    ],
+  });
+});
+
+// ── KICK (member removed without ban — detected via audit log)
+client.on('guildMemberRemove', async member => {
+  try {
+    await new Promise(r => setTimeout(r, 1500)); // let audit log populate
+    const entry = await getAuditEntry(member.guild, AuditLogEvent.MemberKick, member.id, 8000);
+    if (!entry) return; // left on their own — not a kick
+    await sendLog(member.guild, {
+      title: '👢 Member Kicked',
+      color: 0xFEE75C,
+      thumbnail: member.user.displayAvatarURL({ dynamic: true }),
+      fields: [
+        { name: '👤 User', value: `${member.user.tag}`, inline: true },
+        { name: '🆔 ID', value: member.id, inline: true },
+        { name: '👮 By', value: entry.executor ? `${entry.executor}` : 'Unknown', inline: true },
+        { name: '📝 Reason', value: entry.reason || 'No reason provided', inline: false },
+      ],
+    });
+  } catch {}
+});
+
+// ── TIMEOUT  (member update — communicationDisabledUntil changes)
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+  try {
+    const wasTimedOut = oldMember.communicationDisabledUntilTimestamp;
+    const isTimedOut  = newMember.communicationDisabledUntilTimestamp;
+
+    // Timeout added
+    if (!wasTimedOut && isTimedOut) {
+      const entry = await getAuditEntry(newMember.guild, AuditLogEvent.MemberUpdate, newMember.id);
+      const until = Math.floor(isTimedOut / 1000);
+      await sendLog(newMember.guild, {
+        title: '⏰ Member Timed Out',
+        color: 0xFFA500,
+        thumbnail: newMember.user.displayAvatarURL({ dynamic: true }),
+        fields: [
+          { name: '👤 User', value: `${newMember.user.tag}`, inline: true },
+          { name: '🆔 ID', value: newMember.id, inline: true },
+          { name: '👮 By', value: entry?.executor ? `${entry.executor}` : 'Unknown', inline: true },
+          { name: '⏱️ Until', value: `<t:${until}:F>`, inline: true },
+          { name: '📝 Reason', value: entry?.reason || 'No reason provided', inline: false },
+        ],
+      });
+    }
+
+    // Timeout removed
+    if (wasTimedOut && !isTimedOut) {
+      const entry = await getAuditEntry(newMember.guild, AuditLogEvent.MemberUpdate, newMember.id);
+      await sendLog(newMember.guild, {
+        title: '✅ Timeout Removed',
+        color: 0x57F287,
+        thumbnail: newMember.user.displayAvatarURL({ dynamic: true }),
+        fields: [
+          { name: '👤 User', value: `${newMember.user.tag}`, inline: true },
+          { name: '🆔 ID', value: newMember.id, inline: true },
+          { name: '👮 By', value: entry?.executor ? `${entry.executor}` : 'Unknown', inline: true },
+        ],
+      });
+    }
+  } catch {}
+});
+
+// ── MESSAGE DELETE
+client.on('messageDelete', async msg => {
+  try {
+    if (!msg.guild || msg.author?.bot) return;
+    const cfg = getCFG();
+    if (!cfg.logChannel) return;
+    await new Promise(r => setTimeout(r, 1000));
+    const entry = await getAuditEntry(msg.guild, AuditLogEvent.MessageDelete, msg.author?.id, 6000);
+    await sendLog(msg.guild, {
+      title: '🗑️ Message Deleted',
+      color: 0xFF6B6B,
+      fields: [
+        { name: '👤 Author', value: msg.author ? `${msg.author} (${msg.author.tag})` : 'Unknown', inline: true },
+        { name: '📍 Channel', value: `${msg.channel}`, inline: true },
+        { name: '👮 Deleted By', value: entry?.executor ? `${entry.executor}` : 'Author/Unknown', inline: true },
+        { name: '📝 Content', value: msg.content ? (msg.content.length > 1020 ? msg.content.slice(0, 1020) + '…' : msg.content) : '*[No text content]*', inline: false },
+      ],
+    });
+  } catch {}
+});
+
+// ── MESSAGE EDIT
+client.on('messageUpdate', async (oldMsg, newMsg) => {
+  try {
+    if (!oldMsg.guild || oldMsg.author?.bot) return;
+    if (oldMsg.content === newMsg.content) return;
+    await sendLog(oldMsg.guild, {
+      title: '✏️ Message Edited',
+      color: 0x5865F2,
+      fields: [
+        { name: '👤 Author', value: `${oldMsg.author} (${oldMsg.author?.tag})`, inline: true },
+        { name: '📍 Channel', value: `${oldMsg.channel}`, inline: true },
+        { name: '🔗 Jump', value: `[Click here](${newMsg.url})`, inline: true },
+        { name: '📝 Before', value: oldMsg.content ? (oldMsg.content.length > 500 ? oldMsg.content.slice(0,500)+'…' : oldMsg.content) : '*empty*', inline: false },
+        { name: '📝 After',  value: newMsg.content ? (newMsg.content.length > 500 ? newMsg.content.slice(0,500)+'…' : newMsg.content) : '*empty*', inline: false },
+      ],
+    });
+  } catch {}
+});
+
+// ── ROLE GIVEN / REMOVED
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+  try {
+    const cfg = getCFG();
+    if (!cfg.logChannel) return;
+    const added   = newMember.roles.cache.filter(r => !oldMember.roles.cache.has(r.id));
+    const removed = oldMember.roles.cache.filter(r => !newMember.roles.cache.has(r.id));
+    if (!added.size && !removed.size) return;
+    // Ignore if it's just a timeout change (already handled above)
+    const fields = [];
+    if (added.size)   fields.push({ name: '✅ Roles Added',   value: added.map(r=>`<@&${r.id}>`).join(', '),   inline: false });
+    if (removed.size) fields.push({ name: '❌ Roles Removed', value: removed.map(r=>`<@&${r.id}>`).join(', '), inline: false });
+    if (!fields.length) return;
+    await sendLog(newMember.guild, {
+      title: '🎭 Member Roles Updated',
+      color: 0x9B59B6,
+      thumbnail: newMember.user.displayAvatarURL({ dynamic: true }),
+      fields: [
+        { name: '👤 Member', value: `${newMember.user} (${newMember.user.tag})`, inline: true },
+        ...fields,
+      ],
+    });
+  } catch {}
+});
+
+// ══════════════════════════════════════════════════════
 //  SYSTEM — ANTI-LINK
 // ══════════════════════════════════════════════════════
 const LINK_RE = /(https?:\/\/|discord\.gg\/|www\.)\S+/gi;
@@ -229,6 +430,16 @@ client.on('messageCreate', async msg => {
     await member.timeout(5 * 60 * 1000, 'Sent a link without permission');
     const w = await msg.channel.send({ embeds: [errEmbed('🔗 Anti-Link', `${member} — links are not permitted here.\n⏰ You have been timed out for **5 minutes**.`)] });
     setTimeout(() => w.delete().catch(() => {}), 7000);
+    // Log the auto-delete
+    await sendLog(msg.guild, {
+      title: '🔗 Anti-Link — Message Deleted',
+      color: 0xED4245,
+      fields: [
+        { name: '👤 User', value: `${member.user} (${member.user.tag})`, inline: true },
+        { name: '📍 Channel', value: `${msg.channel}`, inline: true },
+        { name: '📝 Content', value: msg.content.length > 800 ? msg.content.slice(0,800)+'…' : msg.content, inline: false },
+      ],
+    });
   } catch {}
 });
 
@@ -253,7 +464,7 @@ client.on('interactionCreate', async interaction => {
 //  SLASH ROUTER
 // ══════════════════════════════════════════════════════
 async function onSlash(i) {
-  if (i.commandName !== 'botinfo' && !isStaff(i.member))
+  if (i.commandName !== 'botinfo' && i.commandName !== 'feedback' && !isStaff(i.member))
     return i.reply({ embeds: [errEmbed('❌ Access Denied', 'You need the staff role to use this command.')], ephemeral: true });
   const map = {
     'setup': cmdSetup, 'botinfo': cmdBotInfo, 'team-panel': cmdTeamPanel,
@@ -265,6 +476,7 @@ async function onSlash(i) {
     'ban': cmdBan, 'unban': cmdUnban, 'kick': cmdKick,
     'timeout': cmdTimeout, 'untimeout': cmdUntimeout, 'warn': cmdWarn,
     'feedback': cmdFeedback, 'welcome-test': cmdWelcomeTest,
+    'verify-panel': cmdVerifyPanel,
   };
   if (map[i.commandName]) return map[i.commandName](i);
 }
@@ -299,8 +511,10 @@ async function cmdSetup(i) {
         { label: '🛡️ Staff Role',              value: 'setup_staffrole',   emoji: '🛡️', description: 'Role that can use bot commands' },
         { label: '🎫 Ticket Settings',        value: 'setup_tickets',     emoji: '🎫', description: 'Support role, category, transcripts' },
         { label: '👋 Welcome Channel',        value: 'setup_welcome',     emoji: '👋', description: 'Where to send welcome messages' },
-        { label: '💬 Feedback Settings',     value: 'setup_feedback',    emoji: '💬', description: 'Channel and allowed role' },
-        { label: '🔗 Anti-Link Settings',    value: 'setup_antilink',    emoji: '🔗', description: 'Enable/disable anti-link' },
+        { label: '💬 Feedback Settings',      value: 'setup_feedback',    emoji: '💬', description: 'Channel and allowed role' },
+        { label: '🔗 Anti-Link Settings',     value: 'setup_antilink',    emoji: '🔗', description: 'Enable/disable anti-link' },
+        { label: '✅ Verification Settings',  value: 'setup_verify',      emoji: '✅', description: 'Role given on verify + channel' },
+        { label: '📋 Log Channel',            value: 'setup_logs',        emoji: '📋', description: 'Channel for moderation logs' },
         { label: '📜 View Current Config',    value: 'setup_view',        emoji: '📜', description: 'See all current settings' },
       ])
   );
@@ -559,8 +773,8 @@ async function cmdDropStart(i) {
 
 async function handleDropClaim(i) {
   const data = loadJSON(DROP_FILE, {});
-  if (!data.messageId)                              return i.reply({ embeds: [errEmbed('❌ No Drop', 'No active drop.')], ephemeral: true });
-  if (data.claimers?.includes(i.user.id))           return i.reply({ embeds: [errEmbed('❌ Already Claimed', 'You already claimed this drop!')], ephemeral: true });
+  if (!data.messageId)                                 return i.reply({ embeds: [errEmbed('❌ No Drop', 'No active drop.')], ephemeral: true });
+  if (data.claimers?.includes(i.user.id))              return i.reply({ embeds: [errEmbed('❌ Already Claimed', 'You already claimed this drop!')], ephemeral: true });
   if ((data.claimers?.length ?? 0) >= data.maxWinners) return i.reply({ embeds: [errEmbed('❌ Too Late', 'All spots have been claimed!')], ephemeral: true });
   data.claimers = [...(data.claimers || []), i.user.id];
   saveJSON(DROP_FILE, data);
@@ -629,6 +843,18 @@ async function cmdWarn(i) {
   const user = i.options.getUser('user'), reason = i.options.getString('reason');
   try { await user.send({ embeds: [warnEmbed('⚠️ Warning', `You received a warning in **${i.guild.name}**.\n\n**Reason:** ${reason}\n\nPlease follow the server rules.`)] }); } catch {}
   await i.reply({ embeds: [warnEmbed('⚠️ Warned', `**User:** ${user.tag}\n**Reason:** ${reason}`)] });
+  // Log the warning manually
+  await sendLog(i.guild, {
+    title: '⚠️ Member Warned',
+    color: 0xFEE75C,
+    thumbnail: user.displayAvatarURL({ dynamic: true }),
+    fields: [
+      { name: '👤 User', value: `${user} (${user.tag})`, inline: true },
+      { name: '🆔 ID', value: user.id, inline: true },
+      { name: '👮 By', value: `${i.user}`, inline: true },
+      { name: '📝 Reason', value: reason, inline: false },
+    ],
+  });
 }
 
 // ══════════════════════════════════════════════════════
@@ -678,10 +904,14 @@ async function cmdBotInfo(i) {
     `Transcript Channel: ${cfg.transcriptChannel ? `<#${cfg.transcriptChannel}>` : 'Not set'}\n\n` +
     `**— Channels —**\n` +
     `Welcome: ${cfg.welcomeChannel ? `<#${cfg.welcomeChannel}>` : 'Not set'}\n` +
-    `Feedback: ${cfg.feedbackChannel ? `<#${cfg.feedbackChannel}>` : 'Not set'}\n\n` +
+    `Feedback: ${cfg.feedbackChannel ? `<#${cfg.feedbackChannel}>` : 'Not set'}\n` +
+    `Log Channel: ${cfg.logChannel ? `<#${cfg.logChannel}>` : 'Not set'}\n\n` +
     `**— Anti-Link —**\n` +
     `Status: ${cfg.antiLinkEnabled ? '✅ Enabled' : '❌ Disabled'}\n` +
-    `Bypass Role: ${cfg.antiLinkBypassRole ? `<@&${cfg.antiLinkBypassRole}>` : 'None'}`
+    `Bypass Role: ${cfg.antiLinkBypassRole ? `<@&${cfg.antiLinkBypassRole}>` : 'None'}\n\n` +
+    `**— Verification —**\n` +
+    `Verified Role: ${cfg.verifyRole ? `<@&${cfg.verifyRole}>` : 'Not set'}\n` +
+    `Verify Message: ${cfg.verifyMessage || 'Default'}`
   )], ephemeral: true });
 }
 
@@ -695,10 +925,13 @@ async function cmdTeamPanel(i) {
     `Use the buttons and menus below to manage all bot systems.\n\n` +
     `👑 **Admin:** ${cfg.adminId ? `<@${cfg.adminId}>` : '⚠️ Not set'}\n` +
     `🛡️ **Staff Role:** ${cfg.staffRole ? `<@&${cfg.staffRole}>` : '⚠️ Not set'}\n` +
-    `🔗 **Anti-Link:** ${cfg.antiLinkEnabled ? '✅ On' : '❌ Off'}`
+    `🔗 **Anti-Link:** ${cfg.antiLinkEnabled ? '✅ On' : '❌ Off'}\n` +
+    `✅ **Verify Role:** ${cfg.verifyRole ? `<@&${cfg.verifyRole}>` : '⚠️ Not set'}\n` +
+    `📋 **Log Channel:** ${cfg.logChannel ? `<#${cfg.logChannel}>` : '⚠️ Not set'}`
   );
   const r1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('team_ticket_panel').setLabel('🎫 Ticket Panel').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('team_verify_panel').setLabel('✅ Verify Panel').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('team_server_stats').setLabel('📊 Stats').setStyle(ButtonStyle.Secondary),
   );
   const r2 = new ActionRowBuilder().addComponents(
@@ -725,10 +958,74 @@ async function cmdTeamPanel(i) {
 }
 
 // ══════════════════════════════════════════════════════
+//  SYSTEM — VERIFICATION
+// ══════════════════════════════════════════════════════
+async function cmdVerifyPanel(i) {
+  if (!isAdmin(i.member))
+    return i.reply({ embeds: [errEmbed('❌ Admin Only', 'Only the admin can send the verification panel.')], ephemeral: true });
+
+  const cfg = getCFG();
+  if (!cfg.verifyRole)
+    return i.reply({ embeds: [errEmbed('❌ Not Configured', 'Please set the **Verify Role** in /setup → Verification Settings first.')], ephemeral: true });
+
+  const title   = cfg.verifyTitle   || '✅ Verification';
+  const message = cfg.verifyMessage || 'Click the button below to verify yourself and gain access to the server.';
+
+  const e = new EmbedBuilder()
+    .setTitle(title)
+    .setDescription(message)
+    .setColor(0x57F287)
+    .setFooter({ text: cfg.botName || 'Staff Bot' })
+    .setTimestamp();
+  if (cfg.botLogo) e.setThumbnail(cfg.botLogo);
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('verify_click')
+      .setLabel(cfg.verifyButtonLabel || '✅ Verify Me')
+      .setStyle(ButtonStyle.Success)
+  );
+
+  await i.channel.send({ embeds: [e], components: [row] });
+  await i.reply({ embeds: [okEmbed('✅ Verification Panel Sent', `Verification panel posted. Members will receive <@&${cfg.verifyRole}> on click.`)], ephemeral: true });
+}
+
+async function handleVerifyClick(i) {
+  const cfg = getCFG();
+  if (!cfg.verifyRole)
+    return i.reply({ embeds: [errEmbed('❌ Not Set Up', 'Verification is not configured. Please contact an admin.')], ephemeral: true });
+
+  if (i.member.roles.cache.has(cfg.verifyRole))
+    return i.reply({ embeds: [warnEmbed('⚠️ Already Verified', 'You are already verified!')], ephemeral: true });
+
+  try {
+    await i.member.roles.add(cfg.verifyRole, 'Verified via verification panel');
+    await i.reply({ embeds: [okEmbed('✅ Verified!', `Welcome! You have been given the <@&${cfg.verifyRole}> role and now have full access.`)], ephemeral: true });
+
+    // Log the verification
+    await sendLog(i.guild, {
+      title: '✅ Member Verified',
+      color: 0x57F287,
+      thumbnail: i.user.displayAvatarURL({ dynamic: true }),
+      fields: [
+        { name: '👤 Member', value: `${i.user} (${i.user.tag})`, inline: true },
+        { name: '🆔 ID',     value: i.user.id, inline: true },
+        { name: '🎭 Role',   value: `<@&${cfg.verifyRole}>`, inline: true },
+      ],
+    });
+  } catch {
+    await i.reply({ embeds: [errEmbed('❌ Failed', 'Could not assign the verified role. Make sure my role is above the verify role in the hierarchy.')], ephemeral: true });
+  }
+}
+
+// ══════════════════════════════════════════════════════
 //  BUTTON HANDLER
 // ══════════════════════════════════════════════════════
 async function onButton(i) {
   const id = i.customId;
+
+  // ── Verification
+  if (id === 'verify_click')         return handleVerifyClick(i);
 
   if (id === 'ticket_close')  return cmdCloseTicket(i);
   if (id === 'ticket_claim') {
@@ -749,6 +1046,7 @@ async function onButton(i) {
   }
   if (id === 'drop_claim')           return handleDropClaim(i);
   if (id === 'team_ticket_panel')    return cmdTicketPanel(i);
+  if (id === 'team_verify_panel')    return cmdVerifyPanel(i);
   if (id === 'team_ticket_stats') {
     const counts = loadJSON(TICKET_COUNTS_FILE, {});
     if (!Object.keys(counts).length)
@@ -855,6 +1153,35 @@ async function handleSetupMenu(i, action) {
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('bypass_role').setLabel('Bypass Role ID (may send links)').setStyle(TextInputStyle.Short).setValue(cfg.antiLinkBypassRole || '').setRequired(false)),
       ); return m;
     },
+    // ── NEW: Verification modal
+    setup_verify: () => {
+      const cfg = getCFG();
+      const m = new ModalBuilder().setCustomId('modal_verify').setTitle('✅ Verification Settings');
+      m.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('verify_role').setLabel('Verified Role ID').setStyle(TextInputStyle.Short).setValue(cfg.verifyRole || '').setRequired(true).setPlaceholder('Right-click the role → Copy ID')
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('verify_title').setLabel('Panel Title').setStyle(TextInputStyle.Short).setValue(cfg.verifyTitle || '✅ Verification').setRequired(false)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('verify_message').setLabel('Panel Message').setStyle(TextInputStyle.Paragraph).setValue(cfg.verifyMessage || 'Click the button below to verify yourself and gain access to the server.').setRequired(false)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('verify_button_label').setLabel('Button Label').setStyle(TextInputStyle.Short).setValue(cfg.verifyButtonLabel || '✅ Verify Me').setRequired(false)
+        ),
+      ); return m;
+    },
+    // ── NEW: Logs modal
+    setup_logs: () => {
+      const cfg = getCFG();
+      const m = new ModalBuilder().setCustomId('modal_logs').setTitle('📋 Log Channel');
+      m.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('log_channel').setLabel('Log Channel ID').setStyle(TextInputStyle.Short).setValue(cfg.logChannel || '').setRequired(true).setPlaceholder('Right-click the channel → Copy ID')
+        ),
+      ); return m;
+    },
   };
 
   if (modals[action]) return i.showModal(modals[action]());
@@ -904,6 +1231,26 @@ async function onModal(i) {
     saveCFG(d);
     return i.reply({ embeds: [okEmbed('✅ Anti-Link Updated', `Anti-link: **${d.antiLinkEnabled ? 'ENABLED ✅' : 'DISABLED ❌'}**`)], ephemeral: true });
   }
+  // ── NEW: Verification modal save
+  if (id === 'modal_verify') {
+    const d = loadCFG();
+    d.verifyRole        = get('verify_role');
+    const title   = get('verify_title');
+    const message = get('verify_message');
+    const label   = get('verify_button_label');
+    if (title)   d.verifyTitle       = title;
+    if (message) d.verifyMessage     = message;
+    if (label)   d.verifyButtonLabel = label;
+    saveCFG(d);
+    return i.reply({ embeds: [okEmbed('✅ Verification Settings Saved',
+      `Verified Role: <@&${d.verifyRole}>\nTitle: **${d.verifyTitle || '✅ Verification'}**\n\nNow use \`/verify-panel\` or the **✅ Verify Panel** button in the Team Panel to post it.`)], ephemeral: true });
+  }
+  // ── NEW: Logs modal save
+  if (id === 'modal_logs') {
+    setCFG('logChannel', get('log_channel'));
+    return i.reply({ embeds: [okEmbed('✅ Log Channel Set', `Moderation logs → <#${getCFG().logChannel}>`)], ephemeral: true });
+  }
+
   await i.reply({ content: '✅ Saved.', ephemeral: true });
 }
 
@@ -911,3 +1258,15 @@ async function onModal(i) {
 //  START
 // ══════════════════════════════════════════════════════
 client.login(process.env.DISCORD_TOKEN);
+ENDOFFILE
+echo "done"
+Output
+
+done
+Done
+
+You are out of free messages until 12:00 AM
+
+
+
+
