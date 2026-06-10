@@ -49,4 +49,5 @@ client.once('ready', async () => {
   setInterval(updateActivity, 60000);
 });
 
-client.login(config.token);
+client.login(process.env.DISCORD_TOKEN || config.token);
+
