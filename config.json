@@ -1,0 +1,31 @@
+{
+  "token": "YOUR_BOT_TOKEN_HERE",
+  "clientId": "YOUR_CLIENT_ID_HERE",
+  "guildId": "YOUR_GUILD_ID_HERE",
+
+  "roles": {
+    "teamRole": "ROLE_ID_פאנל_טיקטים_צוות",
+    "ticketOpenRole": "ROLE_ID_שמגדיר_טיקטים",
+    "ticketHandleRole": "ROLE_ID_מטפל_בטיקטים",
+    "verifyRole": "ROLE_ID_רול_אחרי_אימות",
+    "verifySetupRole": "ROLE_ID_שמגדיר_אימות",
+    "rolePickerSetupRole": "ROLE_ID_שמגדיר_בחירת_רולים",
+    "roleOne": "ROLE_ID_רול_ראשון",
+    "roleTwo": "ROLE_ID_רול_שני",
+    "inviteAdminRole": "ROLE_ID_צפייה_בהזמנות",
+    "designRole": "ROLE_ID_גט_א_דיזיין",
+    "feedbackSetupRole": "ROLE_ID_שמגדיר_פידבקים",
+    "giveawayRole": "ROLE_ID_פותח_הגרלות",
+    "announcerRole": "ROLE_ID_שולח_הודעות_בוט",
+    "tempRoleManager": "ROLE_ID_מנהל_רולים_זמניים",
+    "modRole": "ROLE_ID_מוד",
+    "statusRole": "ROLE_ID_צפייה_סטטוס"
+  },
+
+  "channels": {
+    "transcriptChannel": "CHANNEL_ID_טרנסקריפטים",
+    "feedbackChannel": "CHANNEL_ID_פידבקים",
+    "logsChannel": "CHANNEL_ID_לוגים",
+    "ticketCategory": "CATEGORY_ID_טיקטים"
+  }
+}
