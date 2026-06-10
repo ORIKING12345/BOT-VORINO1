@@ -20,9 +20,9 @@ client.commands = new Collection();
 client.slashCommands = new Collection();
 
 // Load all cogs
-// טעינת הפקודות מהתיקייה הראשית, תוך התעלמות מקובץ הריצה הראשי bot.js
-const cogsPath = __dirname;
-const cogFiles = fs.readdirSync(cogsPath).filter(f => f.endsWith('.js') && f !== 'bot.js');
+const cogsPath = path.join(__dirname, 'cogs');
+const cogFiles = fs.readdirSync(cogsPath).filter(f => f.endsWith('.js'));
+
 
 
 for (const file of cogFiles) {
