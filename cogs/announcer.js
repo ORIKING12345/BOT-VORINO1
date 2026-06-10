@@ -5,7 +5,8 @@ const {
   EmbedBuilder, ModalBuilder, TextInputBuilder,
   TextInputStyle, ActionRowBuilder,
 } = require('discord.js');
-const config = require('../config.json');
+const config = require(require('path').resolve(__dirname, '../config.json'));
+
 
 // צבעים להגדרה
 const COLOR_MAP = {
