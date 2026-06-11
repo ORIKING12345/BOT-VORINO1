@@ -1,3 +1,16 @@
+const express = require('express');
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// נתיב שיענה למערכת הניטור
+app.get('/', (req, res) => {
+    res.send('Bot is up and running!');
+});
+
+app.listen(PORT, () => {
+console.log('Server listening on port ${PORT}');
+});
+
 /**
  * ╔══════════════════════════════════════════════════════════════╗
  * ║              VOrino Bot — All 11 Systems + Extras            ║
