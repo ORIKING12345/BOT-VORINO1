@@ -15,7 +15,7 @@ const {
 
 const CONFIG = {
 TOKEN: process.env.BOT_TOKEN
-const CLIENT_ID = process.env.CLIENT_ID || '1501915415356510299';
+CLIENT_ID: process.env.CLIENT_ID || '1501915415356510299',
   GUILD_ID:           process.env.GUILD_ID           || '1489033656487121077',
   TEAM_ROLE_ID:       process.env.TEAM_ROLE_ID       || '1489313397462798518',
   VERIFIED_ROLE_ID:   process.env.VERIFIED_ROLE_ID   || '1513574669436059841',
