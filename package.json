@@ -1,4 +1,14 @@
-"dependencies": {
-  "discord.js": "^14.15.3",
-  "dotenv": "^16.4.5"
+{
+  "name": "bot-vorino",
+  "version": "1.0.0",
+  "description": "",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "express": "^4.19.2",
+    "dotenv": "^16.4.5"
+  }
 }
