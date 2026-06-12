@@ -2,7 +2,6 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// נתיב שיענה למערכת הניטור
 app.get('/', (req, res) => {
     res.send('Bot is up and running!');
 });
@@ -10,12 +9,6 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
 console.log('Server listening on port ${PORT}');
 });
-
-/**
- * ╔══════════════════════════════════════════════════════════════╗
- * ║              VOrino Bot — All 11 Systems + Extras            ║
- * ╚══════════════════════════════════════════════════════════════╝
- */
 
 require('dotenv').config();
 const {
@@ -51,15 +44,15 @@ const DB = {
 };
 
 // ═══════════════════════════════════════════════════════
-//  PROTECTION STATE — tracks rapid deletions
+//  PROTECTION STATE
 // ═══════════════════════════════════════════════════════
 const PROTECT = {
-  channelDeletes: {},   // userId -> [timestamps]
+  channelDeletes: {},
   roleDeletes:    {},
   kicks:          {},
   bans:           {},
   timeouts:       {},
-  WINDOW_MS: 8000,      // 8 second window
+  WINDOW_MS: 8000,
   MAX_ACTIONS: 2,
 };
 
@@ -69,6 +62,146 @@ function recordAction(map, userId) {
   map[userId] = map[userId].filter(t => now - t < PROTECT.WINDOW_MS);
   map[userId].push(now);
   return map[userId].length;
+}
+
+// ═══════════════════════════════════════════════════════
+//  SYSTEM 13 — ANTI-LINK
+// ═══════════════════════════════════════════════════════
+const ANTI_LINK = {
+  enabled: true,
+
+  // ערוצים שמותר בהם לשלוח לינקים — הוסף Channel IDs לפי הצורך
+  allowedChannels: [],
+
+  // רולים פטורים מהמערכת (צוות פטור אוטומטית דרך isExempt)
+  exemptRoles: [
+    process.env.TEAM_ROLE_ID || '1489313397462798518',
+  ],
+
+  // תבניות לזיהוי לינקים
+  patterns: [
+    /https?:\/\//i,
+    /discord\.gg\/[a-zA-Z0-9]+/i,
+    /discord\.com\/invite\/[a-zA-Z0-9]+/i,
+    /www\.[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}/i,
+    /[a-zA-Z0-9\-]+\.(com|net|org|io|gg|xyz|me|co|dev|app|ly|link|site|online|store|shop|info|biz|tv|cc|vc|tk|ml|ga|cf|gq)/i,
+  ],
+
+  // ניהול אזהרות לפי משתמש
+  warnings: {},
+  MAX_WARNINGS: 3,
+  WARN_RESET_MS: 60 * 60 * 1000, // איפוס אזהרות אחרי שעה
+};
+
+function hasLink(content) {
+  if (!content) return false;
+  return ANTI_LINK.patterns.some(p => p.test(content));
+}
+
+function isExempt(member) {
+  if (!member) return false;
+  if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
+  if (member.permissions.has(PermissionFlagsBits.ManageMessages)) return true;
+  return ANTI_LINK.exemptRoles.some(roleId => member.roles.cache.has(roleId));
+}
+
+function addLinkWarning(userId) {
+  const now = Date.now();
+  if (!ANTI_LINK.warnings[userId]) {
+    ANTI_LINK.warnings[userId] = { count: 0, firstAt: now };
+  }
+  // איפוס אם עברה שעה מאז האזהרה הראשונה
+  if (now - ANTI_LINK.warnings[userId].firstAt > ANTI_LINK.WARN_RESET_MS) {
+    ANTI_LINK.warnings[userId] = { count: 0, firstAt: now };
+  }
+  ANTI_LINK.warnings[userId].count++;
+  return ANTI_LINK.warnings[userId].count;
+}
+
+async function handleAntiLink(message, client) {
+  if (!ANTI_LINK.enabled) return;
+  if (!message.guild) return;
+  if (message.author.bot) return;
+
+  // ערוץ פטור?
+  if (ANTI_LINK.allowedChannels.includes(message.channelId)) return;
+
+  // משתמש פטור?
+  if (isExempt(message.member)) return;
+
+  if (!hasLink(message.content)) return;
+
+  // מחק את ההודעה
+  try { await message.delete(); } catch {}
+
+  const warns = addLinkWarning(message.author.id);
+
+  if (warns >= ANTI_LINK.MAX_WARNINGS) {
+    // Timeout של 10 דקות לאחר חריגה
+    try {
+      await message.member.timeout(10 * 60 * 1000, '🛡️ אנטי-לינק: חריגה ממגבלת אזהרות');
+    } catch {}
+
+    // איפוס אזהרות לאחר ה-timeout
+    ANTI_LINK.warnings[message.author.id] = { count: 0, firstAt: Date.now() };
+
+    try {
+      const warn = await message.channel.send({
+        content: `<@${message.author.id}>`,
+        embeds: [new EmbedBuilder()
+          .setTitle('🔇 קיבלת עצירה זמנית!')
+          .setDescription(
+            `<@${message.author.id}> קיבלת **timeout של 10 דקות** בגלל שליחת לינקים חוזרת.\n\n` +
+            `⚠️ שליחת לינקים אינה מותרת בשרת זה.`
+          )
+          .setColor(0xED4245)
+          .setTimestamp()
+        ]
+      });
+      setTimeout(() => warn.delete().catch(() => {}), 8000);
+    } catch {}
+
+    await sendLog(client, new EmbedBuilder()
+      .setTitle('🛡️ אנטי-לינק: Timeout הוטל')
+      .addFields(
+        { name: '👤 משתמש', value: `<@${message.author.id}> (${message.author.tag})`, inline: true },
+        { name: '📍 ערוץ', value: `<#${message.channelId}>`, inline: true },
+        { name: '📝 תוכן שנמחק', value: message.content.slice(0, 300) },
+        { name: '⚡ פעולה', value: 'הודעה נמחקה + timeout 10 דקות', inline: false },
+      )
+      .setColor(0xED4245).setTimestamp()
+    );
+
+  } else {
+    // אזהרה רגילה
+    try {
+      const warn = await message.channel.send({
+        content: `<@${message.author.id}>`,
+        embeds: [new EmbedBuilder()
+          .setTitle('🔗 שליחת לינקים אסורה!')
+          .setDescription(
+            `<@${message.author.id}> הודעתך נמחקה.\n\n` +
+            `⚠️ **אזהרה ${warns}/${ANTI_LINK.MAX_WARNINGS}** — שליחת לינקים אינה מותרת בשרת זה.\n` +
+            `לאחר ${ANTI_LINK.MAX_WARNINGS} אזהרות תקבל timeout של 10 דקות.`
+          )
+          .setColor(0xFEE75C)
+          .setTimestamp()
+        ]
+      });
+      setTimeout(() => warn.delete().catch(() => {}), 6000);
+    } catch {}
+
+    await sendLog(client, new EmbedBuilder()
+      .setTitle('🔗 אנטי-לינק: לינק נמחק')
+      .addFields(
+        { name: '👤 משתמש', value: `<@${message.author.id}> (${message.author.tag})`, inline: true },
+        { name: '📍 ערוץ', value: `<#${message.channelId}>`, inline: true },
+        { name: '⚠️ אזהרות', value: `${warns}/${ANTI_LINK.MAX_WARNINGS}`, inline: true },
+        { name: '📝 תוכן שנמחק', value: message.content.slice(0, 300) },
+      )
+      .setColor(0xFEE75C).setTimestamp()
+    );
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -102,7 +235,6 @@ const COMMANDS = [
     .addStringOption(o => o.setName('message').setDescription('ההודעה').setRequired(true))
     .addStringOption(o => o.setName('title').setDescription('כותרת (אופציונלי)'))
     .addStringOption(o => o.setName('color').setDescription('צבע hex')),
-  // DM-All system
   new SlashCommandBuilder().setName('dmall')
     .setDescription('📨 שלח הודעה פרטית לכל חברי השרת [צוות]')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
@@ -155,6 +287,30 @@ const COMMANDS = [
     .setDescription('🏆 סיים הגרלה [צוות]')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(o => o.setName('messageid').setDescription('ID הודעה').setRequired(true)),
+
+  // ── Anti-Link Management ──
+  new SlashCommandBuilder().setName('antilink')
+    .setDescription('🔗 ניהול מערכת אנטי-לינק [צוות]')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addSubcommand(sub => sub
+      .setName('toggle')
+      .setDescription('הפעל או כבה את המערכת')
+      .addBooleanOption(o => o.setName('enabled').setDescription('true = פעיל | false = כבוי').setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('allow-channel')
+      .setDescription('הוסף ערוץ שמותר בו לינקים')
+      .addChannelOption(o => o.setName('channel').setDescription('הערוץ').setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('remove-channel')
+      .setDescription('הסר ערוץ מרשימת הפטורים')
+      .addChannelOption(o => o.setName('channel').setDescription('הערוץ').setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('status')
+      .setDescription('הצג את סטטוס המערכת הנוכחי'))
+    .addSubcommand(sub => sub
+      .setName('clearwarnings')
+      .setDescription('אפס אזהרות של משתמש מסוים')
+      .addUserOption(o => o.setName('user').setDescription('המשתמש').setRequired(true))),
 ];
 
 // ═══════════════════════════════════════════════════════
@@ -171,6 +327,81 @@ async function sendLog(client, embed) {
     const ch = await client.channels.fetch(CONFIG.LOG_CHANNEL_ID);
     if (ch) ch.send({ embeds: [embed] });
   } catch {}
+}
+
+// ═══════════════════════════════════════════════════════
+//  ANTI-LINK SLASH COMMAND HANDLER
+// ═══════════════════════════════════════════════════════
+async function handleAntiLinkCommand(interaction) {
+  if (!isTeam(interaction.member)) {
+    return interaction.reply({ content: '❌ רק צוות יכול לנהל את המערכת.', ephemeral: true });
+  }
+
+  const sub = interaction.options.getSubcommand();
+
+  if (sub === 'toggle') {
+    ANTI_LINK.enabled = interaction.options.getBoolean('enabled');
+    await interaction.reply({
+      embeds: [new EmbedBuilder()
+        .setTitle('🔗 אנטי-לינק — עדכון מצב')
+        .setDescription(`המערכת כעת: **${ANTI_LINK.enabled ? '✅ פעילה' : '❌ כבויה'}**`)
+        .setColor(ANTI_LINK.enabled ? 0x57F287 : 0xED4245)
+        .setTimestamp()
+      ], ephemeral: true
+    });
+
+  } else if (sub === 'allow-channel') {
+    const ch = interaction.options.getChannel('channel');
+    if (ANTI_LINK.allowedChannels.includes(ch.id)) {
+      return interaction.reply({ content: '⚠️ הערוץ כבר נמצא ברשימת הפטורים.', ephemeral: true });
+    }
+    ANTI_LINK.allowedChannels.push(ch.id);
+    await interaction.reply({
+      embeds: [new EmbedBuilder()
+        .setDescription(`✅ הערוץ <#${ch.id}> נוסף לרשימת הפטורים — לינקים מותרים שם.`)
+        .setColor(0x57F287)
+      ], ephemeral: true
+    });
+
+  } else if (sub === 'remove-channel') {
+    const ch = interaction.options.getChannel('channel');
+    ANTI_LINK.allowedChannels = ANTI_LINK.allowedChannels.filter(id => id !== ch.id);
+    await interaction.reply({
+      embeds: [new EmbedBuilder()
+        .setDescription(`✅ הערוץ <#${ch.id}> הוסר מרשימת הפטורים.`)
+        .setColor(0x57F287)
+      ], ephemeral: true
+    });
+
+  } else if (sub === 'status') {
+    const allowedList = ANTI_LINK.allowedChannels.length > 0
+      ? ANTI_LINK.allowedChannels.map(id => `<#${id}>`).join('\n')
+      : 'אין ערוצים פטורים';
+    const exemptList = ANTI_LINK.exemptRoles.map(id => `<@&${id}>`).join(', ');
+    await interaction.reply({
+      embeds: [new EmbedBuilder()
+        .setTitle('🔗 סטטוס מערכת אנטי-לינק')
+        .addFields(
+          { name: '⚡ מצב', value: ANTI_LINK.enabled ? '✅ פעיל' : '❌ כבוי', inline: true },
+          { name: '⚠️ מקסימום אזהרות לפני timeout', value: `${ANTI_LINK.MAX_WARNINGS}`, inline: true },
+          { name: '⏳ איפוס אזהרות אחרי', value: '1 שעה', inline: true },
+          { name: '📢 ערוצים פטורים', value: allowedList },
+          { name: '🛡️ רולים פטורים', value: exemptList },
+        )
+        .setColor(0x5865F2).setTimestamp()
+      ], ephemeral: true
+    });
+
+  } else if (sub === 'clearwarnings') {
+    const user = interaction.options.getUser('user');
+    delete ANTI_LINK.warnings[user.id];
+    await interaction.reply({
+      embeds: [new EmbedBuilder()
+        .setDescription(`✅ אזהרות האנטי-לינק של <@${user.id}> אופסו.`)
+        .setColor(0x57F287)
+      ], ephemeral: true
+    });
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -405,7 +636,7 @@ async function handleWelcome(member, client) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 4 — ORDERS (with per-user count)
+//  SYSTEM 4 — ORDERS
 // ═══════════════════════════════════════════════════════
 async function addOrder(interaction) {
   const user = interaction.options.getUser('user');
@@ -454,8 +685,7 @@ async function showOrders(interaction) {
     return interaction.reply({ content: '❌ רק צוות יכול לצפות בטבלה זו.', ephemeral: true });
   }
   if (DB.orders.length === 0) {
-   return interaction.reply({ embeds: [new EmbedBuilder().setDescription('📋 אין הזמנות עדיין.').setColor(0x5865F2)], ephemeral: false });
-
+    return interaction.reply({ embeds: [new EmbedBuilder().setDescription('📋 אין הזמנות עדיין.').setColor(0x5865F2)] });
   }
   const embed = new EmbedBuilder()
     .setTitle('📋 טבלת הזמנות')
@@ -483,16 +713,14 @@ async function showMyOrders(interaction) {
   await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
-// סטטיסטיקת הזמנות לפי משתמש — לצוות בלבד
 async function showOrderStats(interaction) {
   if (!isTeam(interaction.member)) {
     return interaction.reply({ content: '❌ רק צוות יכול לצפות בסטטיסטיקה.', ephemeral: true });
   }
   if (DB.orders.length === 0) {
-    return interaction.reply({ embeds: [new EmbedBuilder().setDescription('📊 אין נתונים עדיין.').setColor(0x5865F2)], ephemeral: false });
+    return interaction.reply({ embeds: [new EmbedBuilder().setDescription('📊 אין נתונים עדיין.').setColor(0x5865F2)] });
   }
 
-  // Count orders per user
   const userMap = {};
   DB.orders.forEach(o => {
     if (!userMap[o.userId]) userMap[o.userId] = { tag: o.tag, count: 0, totalQty: 0 };
@@ -556,6 +784,7 @@ async function dmAll(interaction, client) {
 
   try {
     const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
+    const members = await guild.members.fetch();
 
     let success = 0;
     let failed = 0;
@@ -572,7 +801,6 @@ async function dmAll(interaction, client) {
       try {
         await member.send({ embeds: [embed] });
         success++;
-        // Small delay to avoid rate limits
         await new Promise(r => setTimeout(r, 500));
       } catch {
         failed++;
@@ -708,18 +936,6 @@ async function logMessageDelete(msg, client) {
   );
 }
 
-async function logMemberUpdate(oldMember, newMember, client) {
-  const wasTimedOut = !oldMember.communicationDisabledUntil;
-  const isTimedOut = !!newMember.communicationDisabledUntil && newMember.communicationDisabledUntil > new Date();
-  if (wasTimedOut && isTimedOut) {
-    await sendLog(client, new EmbedBuilder()
-      .setTitle('⏳ Timeout')
-      .setDescription(`<@${newMember.id}> קיבל timeout עד: <t:${Math.floor(newMember.communicationDisabledUntil / 1000)}:F>`)
-      .setColor(0xFEE75C).setTimestamp()
-    );
-  }
-}
-
 // ═══════════════════════════════════════════════════════
 //  SYSTEM 8 — WARRANTY
 // ═══════════════════════════════════════════════════════
@@ -766,16 +982,15 @@ async function checkWarranty(interaction) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 9 — PROOFS PANEL (STABLE & NO RATE LIMIT)
+//  SYSTEM 9 — PROOFS PANEL
 // ═══════════════════════════════════════════════════════
 async function setupProofs(interaction, client) {
   await interaction.deferReply({ ephemeral: false });
 
   const guild = interaction.guild;
   const buildEmbed = (pm) => {
-    // יצירת הרשימה על בסיס החברים שמצאנו
-    const list = pm && pm.length > 0 
-      ? pm.map(m => `• <@${m.id}>`).join('\n') 
+    const list = pm && pm.length > 0
+      ? pm.map(m => `• <@${m.id}>`).join('\n')
       : 'אין חברים עם רול זה כרגע.';
 
     return new EmbedBuilder()
@@ -788,20 +1003,17 @@ async function setupProofs(interaction, client) {
   };
 
   try {
-    // 🛠️ התיקון הסופי: מושך אך ורק את רשימת ה-IDs של חברי הרול (מונע חסימות לחלוטין)
     const role = await guild.roles.fetch(CONFIG.PROOF_ROLE_ID);
     let proofMembers = [];
-    
+
     if (role) {
-      // מביא את כל חברי הרול בצורה ישירה ויציבה
       const fetchedMembers = await role.guild.members.fetch();
       proofMembers = fetchedMembers.filter(m => m.roles.cache.has(CONFIG.PROOF_ROLE_ID)).map(m => m);
     }
-    
+
     const msg = await interaction.channel.send({ embeds: [buildEmbed(proofMembers)] });
     await interaction.editReply({ content: '✅ פאנל החברים נשלח בהצלחה לערוץ!' });
 
-    // לולאה בטוחה
     const intervalId = setInterval(async () => {
       try {
         const freshMsg = await interaction.channel.messages.fetch(msg.id).catch(() => null);
@@ -826,8 +1038,7 @@ async function setupProofs(interaction, client) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 10 — ACTIVITY STATUS (Legacy Design style)
-//  Uses ActivityType.Custom with emoji + state text
+//  SYSTEM 10 — ACTIVITY STATUS
 // ═══════════════════════════════════════════════════════
 function startActivityRotation(client) {
   let phase = 0;
@@ -837,8 +1048,6 @@ function startActivityRotation(client) {
       if (!guild) return;
 
       const total = guild.memberCount;
-      
-      // תיקון החסימה: משיכה מהירה של התפקיד וספירת החברים שלו בלי להעמיס
       const role = guild.roles.cache.get(CONFIG.PROOF_ROLE_ID) || await guild.roles.fetch(CONFIG.PROOF_ROLE_ID);
       const proofCount = role ? role.members.size : 0;
 
@@ -855,9 +1064,8 @@ function startActivityRotation(client) {
       console.error('שגיאה בעדכון הסטטוס:', err);
     }
   };
-  
+
   update();
-  // שינינו את הזמן ל-30 שניות (30000ms) כדי למנוע מנטלית משרתי דיסקורד לחסום את הבוט שלך
   setInterval(update, 30 * 1000);
 }
 
@@ -996,19 +1204,15 @@ async function handleGuessModal(interaction) {
 
 // ═══════════════════════════════════════════════════════
 //  SYSTEM 12 — SERVER PROTECTION
-//  • Block bot additions (except owner)
-//  • Ban on rapid channel/role/kick/ban/timeout actions
 // ═══════════════════════════════════════════════════════
-
 async function handleGuildMemberAdd(member, client) {
   if (!member.user.bot) return;
 
   const guild = member.guild;
   const owner = await guild.fetchOwner();
 
-  // Try to find who added the bot via audit log
   try {
-    await new Promise(r => setTimeout(r, 1500)); // wait for audit log
+    await new Promise(r => setTimeout(r, 1500));
     const auditLogs = await guild.fetchAuditLogs({ type: AuditLogEvent.BotAdd, limit: 5 });
     const entry = auditLogs.entries.find(e =>
       e.target?.id === member.id && Date.now() - e.createdTimestamp < 10000
@@ -1017,7 +1221,6 @@ async function handleGuildMemberAdd(member, client) {
     if (entry) {
       const executor = entry.executor;
       if (executor && executor.id !== owner.id) {
-        // Not owner — kick the bot and ban the adder
         try { await member.kick('🛡️ הגנת שרת: הוספת בוט לא מורשה'); } catch {}
         try {
           await guild.bans.create(executor.id, { reason: '🛡️ הגנת שרת: ניסיון הוספת בוט לא מורשה' });
@@ -1039,7 +1242,6 @@ async function handleGuildMemberAdd(member, client) {
     console.error('Bot add protection error:', e);
   }
 
-  // If owner added it — just log
   await sendLog(client, new EmbedBuilder()
     .setTitle('🤖 בוט נוסף')
     .setDescription(`${member.user.tag} נוסף על ידי האוונר.`)
@@ -1065,7 +1267,6 @@ async function handleChannelDelete(channel, client) {
 
     const count = recordAction(PROTECT.channelDeletes, executor.id);
     if (count > PROTECT.MAX_ACTIONS) {
-      // Ban the raider
       try { await guild.bans.create(executor.id, { reason: '🛡️ הגנת שרת: מחיקת ערוצים ברצף' }); } catch {}
       await sendLog(client, new EmbedBuilder()
         .setTitle('🛡️ הגנה: מחיקת ערוצים ברצף')
@@ -1116,20 +1317,16 @@ async function handleProtectedMemberUpdate(oldMember, newMember, client) {
   const guild = newMember.guild;
   const owner = await guild.fetchOwner().catch(() => null);
 
-  // Detect kick/ban via audit log for mass actions
-  // Detect rapid timeouts
   const wasTimedOut = !oldMember.communicationDisabledUntil;
   const isTimedOut = !!newMember.communicationDisabledUntil && newMember.communicationDisabledUntil > new Date();
 
   if (wasTimedOut && isTimedOut) {
-    // Log for system 7
     await sendLog(client, new EmbedBuilder()
       .setTitle('⏳ Timeout')
       .setDescription(`<@${newMember.id}> קיבל timeout עד: <t:${Math.floor(newMember.communicationDisabledUntil / 1000)}:F>`)
       .setColor(0xFEE75C).setTimestamp()
     );
 
-    // Check if rapid
     try {
       await new Promise(r => setTimeout(r, 1000));
       const auditLogs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberUpdate, limit: 5 });
@@ -1157,10 +1354,8 @@ async function handleProtectedMemberUpdate(oldMember, newMember, client) {
 }
 
 async function handleProtectedBanAdd(ban, client) {
-  // Existing log
   await logBanAdd(ban, client);
 
-  // Protection check for mass bans
   const guild = ban.guild;
   try {
     await new Promise(r => setTimeout(r, 1000));
@@ -1189,10 +1384,8 @@ async function handleProtectedBanAdd(ban, client) {
 }
 
 async function handleProtectedMemberRemove(member, client) {
-  // Existing log
   await logMemberRemove(member, client);
 
-  // Protection: rapid kicks
   const guild = member.guild;
   try {
     await new Promise(r => setTimeout(r, 1000));
@@ -1266,6 +1459,7 @@ client.on('interactionCreate', async (interaction) => {
       if (cmd === 'giveaway') return createGiveaway(interaction);
       if (cmd === 'guessnumber') return startGuessGame(interaction);
       if (cmd === 'endgiveaway') return endGiveawayCommand(interaction);
+      if (cmd === 'antilink') return handleAntiLinkCommand(interaction);
     }
 
     if (interaction.isButton()) {
@@ -1318,6 +1512,11 @@ client.on('messageDelete', (msg) => logMessageDelete(msg, client));
 client.on('guildMemberUpdate', (oldMember, newMember) => handleProtectedMemberUpdate(oldMember, newMember, client));
 client.on('channelDelete', (channel) => handleChannelDelete(channel, client));
 client.on('roleDelete', (role) => handleRoleDelete(role, client));
+
+// ═══════════════════════════════════════════════════════
+//  SYSTEM 13 — ANTI-LINK: מאזין להודעות
+// ═══════════════════════════════════════════════════════
+client.on('messageCreate', (message) => handleAntiLink(message, client));
 
 // ═══════════════════════════════════════════════════════
 //  DEPLOY
