@@ -25,22 +25,14 @@ const CONFIG = {
   GUILD_ID:           process.env.GUILD_ID           || '1489033656487121077',
   TEAM_ROLE_ID:       process.env.TEAM_ROLE_ID       || '1489313397462798518',
   VERIFIED_ROLE_ID:   process.env.VERIFIED_ROLE_ID   || '1513574669436059841',
-  PROOF_ROLE_ID:      process.env.PROOF_ROLE_ID      || '1490779090733760795',
   WELCOME_CHANNEL_ID: process.env.WELCOME_CHANNEL_ID || '1497538017538347069',
   LOG_CHANNEL_ID:     process.env.LOG_CHANNEL_ID     || '1514300287605801102',
   TICKET_CATEGORY_ID: process.env.TICKET_CATEGORY_ID || '1495059280242675916',
-  PROOF_CHANNEL_ID:   process.env.PROOF_CHANNEL_ID   || '1514607305776300234',
-  ORDERS_CHANNEL_ID:  process.env.ORDERS_CHANNEL_ID  || '1514607472327786657',
 };
 
 const DB = {
-  tickets:    {},
-  orders:     [],
-  coupons:    {},
-  warranties: {},
-  giveaways:  {},
-  drops:      {},
-  guessGames: {},
+  tickets:   {},
+  giveaways: {},
 };
 
 // ═══════════════════════════════════════════════════════
@@ -214,20 +206,6 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('setup-verify')
     .setDescription('✅ שלח את פאנל האימות [צוות]')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-  new SlashCommandBuilder().setName('addorder')
-    .setDescription('➕ הוסף הזמנה [צוות]')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addUserOption(o => o.setName('user').setDescription('המשתמש').setRequired(true))
-    .addStringOption(o => o.setName('item').setDescription('המוצר').setRequired(true))
-    .addIntegerOption(o => o.setName('quantity').setDescription('כמות').setRequired(true)),
-  new SlashCommandBuilder().setName('orders')
-    .setDescription('📋 הצג טבלת הזמנות [צוות]')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-  new SlashCommandBuilder().setName('myorders')
-    .setDescription('📦 ההזמנות שלי'),
-  new SlashCommandBuilder().setName('orderstats')
-    .setDescription('📊 סטטיסטיקת הזמנות לפי משתמש [צוות]')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('broadcast')
     .setDescription('📢 שלח הודעה מהבוט [צוות]')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
@@ -240,49 +218,12 @@ const COMMANDS = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(o => o.setName('message').setDescription('תוכן ההודעה').setRequired(true))
     .addStringOption(o => o.setName('title').setDescription('כותרת (אופציונלי)')),
-  new SlashCommandBuilder().setName('createcoupon')
-    .setDescription('🎟️ צור קופון [צוות]')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addStringOption(o => o.setName('code').setDescription('קוד הקופון').setRequired(true))
-    .addUserOption(o => o.setName('user').setDescription('המשתמש').setRequired(true))
-    .addStringOption(o => o.setName('reward').setDescription('הפרס').setRequired(true)),
-  new SlashCommandBuilder().setName('redeemcoupon')
-    .setDescription('🎁 מימוש קופון')
-    .addStringOption(o => o.setName('code').setDescription('קוד').setRequired(true)),
-  new SlashCommandBuilder().setName('checkcoupon')
-    .setDescription('🔍 בדוק קופון [צוות]')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addStringOption(o => o.setName('code').setDescription('קוד').setRequired(true)),
-  new SlashCommandBuilder().setName('addwarranty')
-    .setDescription('🛡️ הוסף אחריות [צוות]')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addUserOption(o => o.setName('user').setDescription('המשתמש').setRequired(true))
-    .addStringOption(o => o.setName('item').setDescription('המוצר').setRequired(true))
-    .addStringOption(o => o.setName('duration').setDescription('משך').setRequired(true)),
-  new SlashCommandBuilder().setName('mywarranty')
-    .setDescription('🛡️ הצג אחריות שלי'),
-  new SlashCommandBuilder().setName('checkwarranty')
-    .setDescription('🔍 בדוק אחריות משתמש [צוות]')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addUserOption(o => o.setName('user').setDescription('המשתמש').setRequired(true)),
-  new SlashCommandBuilder().setName('setup-proofs')
-    .setDescription('📊 שלח פאנל הוכחות [צוות]')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-  new SlashCommandBuilder().setName('drop')
-    .setDescription('🎁 צור דרופ [צוות]')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addStringOption(o => o.setName('prize').setDescription('הפרס').setRequired(true)),
   new SlashCommandBuilder().setName('giveaway')
     .setDescription('🎉 צור הגרלה [צוות]')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(o => o.setName('prize').setDescription('הפרס').setRequired(true))
     .addIntegerOption(o => o.setName('winners').setDescription('זוכים').setRequired(true))
     .addIntegerOption(o => o.setName('minutes').setDescription('דקות').setRequired(true)),
-  new SlashCommandBuilder().setName('guessnumber')
-    .setDescription('🔢 התחל משחק נחש מספר [צוות]')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addStringOption(o => o.setName('prize').setDescription('הפרס').setRequired(true))
-    .addIntegerOption(o => o.setName('max').setDescription('מספר מקסימלי')),
   new SlashCommandBuilder().setName('endgiveaway')
     .setDescription('🏆 סיים הגרלה [צוות]')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
@@ -429,12 +370,9 @@ async function handleTicketOpen(interaction, client) {
       .setCustomId('ticket_category')
       .setPlaceholder('📂 בחר קטגוריה')
       .addOptions([
-        { label: '💬 תמיכה כללית', value: 'general', emoji: '💬' },
-        { label: '🛒 בעיה בהזמנה', value: 'order', emoji: '🛒' },
-        { label: '💰 תשלום', value: 'payment', emoji: '💰' },
-        { label: '🛡️ אחריות', value: 'warranty', emoji: '🛡️' },
-        { label: '🎁 קופון', value: 'coupon', emoji: '🎁' },
-        { label: '🔧 בעיה טכנית', value: 'tech', emoji: '🔧' },
+        { label: '💬 שאלה כללית', value: 'general', emoji: '💬' },
+        { label: '🛒 קניה', value: 'purchase', emoji: '🛒' },
+        { label: '🎁 קבלת פרס', value: 'prize', emoji: '🎁' },
       ])
   );
   await interaction.reply({
@@ -446,7 +384,7 @@ async function handleTicketOpen(interaction, client) {
 
 async function handleTicketCategory(interaction, client) {
   const category = interaction.values[0];
-  const categoryNames = { general: '💬 כללי', order: '🛒 הזמנה', payment: '💰 תשלום', warranty: '🛡️ אחריות', coupon: '🎁 קופון', tech: '🔧 טכני' };
+  const categoryNames = { general: '💬 שאלה כללית', purchase: '🛒 קניה', prize: '🎁 קבלת פרס' };
   const guild = interaction.guild;
   const user = interaction.user;
   await interaction.deferUpdate();
@@ -636,119 +574,6 @@ async function handleWelcome(member, client) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 4 — ORDERS
-// ═══════════════════════════════════════════════════════
-async function addOrder(interaction) {
-  const user = interaction.options.getUser('user');
-  const item = interaction.options.getString('item');
-  const quantity = interaction.options.getInteger('quantity');
-  const orderId = randomId(8);
-
-  DB.orders.push({
-    orderId, userId: user.id, tag: user.tag, item, quantity,
-    date: new Date().toLocaleDateString('he-IL'), addedBy: interaction.user.id,
-  });
-
-  const userTotal = DB.orders.filter(o => o.userId === user.id).length;
-
-  const embed = new EmbedBuilder()
-    .setTitle('✅ הזמנה נוספה')
-    .addFields(
-      { name: '🆔 מזהה', value: orderId, inline: true },
-      { name: '👤 משתמש', value: `<@${user.id}>`, inline: true },
-      { name: '📦 מוצר', value: item, inline: true },
-      { name: '🔢 כמות', value: `${quantity}`, inline: true },
-      { name: '📅 תאריך', value: new Date().toLocaleDateString('he-IL'), inline: true },
-      { name: '📊 סה"כ הזמנות למשתמש', value: `${userTotal}`, inline: true },
-    )
-    .setColor(0x57F287).setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
-
-  try {
-    await user.send({ embeds: [new EmbedBuilder()
-      .setTitle('📦 הזמנה חדשה!')
-      .setDescription(`הזמנה חדשה נוספה עבורך בשרת **${interaction.guild.name}**`)
-      .addFields(
-        { name: '🆔 מזהה', value: orderId, inline: true },
-        { name: '📦 מוצר', value: item, inline: true },
-        { name: '🔢 כמות', value: `${quantity}`, inline: true },
-        { name: '📊 סה"כ הזמנות שלך', value: `${userTotal}`, inline: true },
-      )
-      .setColor(0x5865F2).setTimestamp()
-    ]});
-  } catch {}
-}
-
-async function showOrders(interaction) {
-  if (!isTeam(interaction.member)) {
-    return interaction.reply({ content: '❌ רק צוות יכול לצפות בטבלה זו.', ephemeral: true });
-  }
-  if (DB.orders.length === 0) {
-    return interaction.reply({ embeds: [new EmbedBuilder().setDescription('📋 אין הזמנות עדיין.').setColor(0x5865F2)] });
-  }
-  const embed = new EmbedBuilder()
-    .setTitle('📋 טבלת הזמנות')
-    .setColor(0x5865F2)
-    .setFooter({ text: `סך הכל: ${DB.orders.length} הזמנות` })
-    .setTimestamp();
-  DB.orders.slice(0, 10).forEach((o, i) => {
-    embed.addFields({ name: `#${i + 1} | ${o.orderId}`, value: `👤 <@${o.userId}>\n📦 ${o.item} × ${o.quantity}\n📅 ${o.date}`, inline: true });
-  });
-  await interaction.reply({ embeds: [embed] });
-}
-
-async function showMyOrders(interaction) {
-  const mine = DB.orders.filter(o => o.userId === interaction.user.id);
-  if (mine.length === 0) {
-    return interaction.reply({ embeds: [new EmbedBuilder().setDescription('📦 אין לך הזמנות עדיין.').setColor(0x5865F2)], ephemeral: true });
-  }
-  const embed = new EmbedBuilder()
-    .setTitle('📦 ההזמנות שלי')
-    .setColor(0x5865F2)
-    .setFooter({ text: `סך הכל: ${mine.length} הזמנות` });
-  mine.forEach((o, i) => {
-    embed.addFields({ name: `#${i + 1} — ${o.orderId}`, value: `📦 ${o.item}\n🔢 × ${o.quantity}\n📅 ${o.date}`, inline: true });
-  });
-  await interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-async function showOrderStats(interaction) {
-  if (!isTeam(interaction.member)) {
-    return interaction.reply({ content: '❌ רק צוות יכול לצפות בסטטיסטיקה.', ephemeral: true });
-  }
-  if (DB.orders.length === 0) {
-    return interaction.reply({ embeds: [new EmbedBuilder().setDescription('📊 אין נתונים עדיין.').setColor(0x5865F2)] });
-  }
-
-  const userMap = {};
-  DB.orders.forEach(o => {
-    if (!userMap[o.userId]) userMap[o.userId] = { tag: o.tag, count: 0, totalQty: 0 };
-    userMap[o.userId].count++;
-    userMap[o.userId].totalQty += o.quantity;
-  });
-
-  const sorted = Object.entries(userMap).sort((a, b) => b[1].count - a[1].count);
-
-  const embed = new EmbedBuilder()
-    .setTitle('📊 סטטיסטיקת הזמנות לפי משתמש')
-    .setColor(0x5865F2)
-    .setFooter({ text: `${sorted.length} משתמשים | ${DB.orders.length} הזמנות סה"כ` })
-    .setTimestamp();
-
-  sorted.slice(0, 15).forEach(([userId, data], i) => {
-    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`;
-    embed.addFields({
-      name: `${medal} ${data.tag}`,
-      value: `👤 <@${userId}>\n📦 ${data.count} הזמנות | 🔢 ${data.totalQty} פריטים`,
-      inline: true
-    });
-  });
-
-  await interaction.reply({ embeds: [embed] });
-}
-
-// ═══════════════════════════════════════════════════════
 //  SYSTEM 5 — BROADCAST
 // ═══════════════════════════════════════════════════════
 async function broadcast(interaction) {
@@ -829,65 +654,6 @@ async function dmAll(interaction, client) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 6 — COUPONS
-// ═══════════════════════════════════════════════════════
-async function createCoupon(interaction) {
-  const code = interaction.options.getString('code').toUpperCase();
-  const user = interaction.options.getUser('user');
-  const reward = interaction.options.getString('reward');
-  DB.coupons[code] = { reward, used: false, createdBy: interaction.user.id, userId: user.id };
-  try {
-    await user.send({ embeds: [new EmbedBuilder()
-      .setTitle('🎟️ קיבלת קופון!')
-      .setDescription(`קוד: \`${code}\`\n\n**פרס:** ${reward}\n\nפתח טיקט לממש.`)
-      .setColor(0xFEE75C).setTimestamp()
-    ]});
-  } catch {}
-  await interaction.reply({ embeds: [new EmbedBuilder()
-    .setTitle('✅ קופון נוצר')
-    .addFields(
-      { name: '🎟️ קוד', value: `\`${code}\``, inline: true },
-      { name: '👤 משתמש', value: `<@${user.id}>`, inline: true },
-      { name: '🎁 פרס', value: reward, inline: true },
-    ).setColor(0x57F287).setTimestamp()
-  ], ephemeral: true });
-}
-
-async function redeemCoupon(interaction) {
-  const code = interaction.options.getString('code').toUpperCase();
-  const coupon = DB.coupons[code];
-  if (!coupon) return interaction.reply({ embeds: [new EmbedBuilder().setDescription('❌ קוד לא קיים.').setColor(0xED4245)], ephemeral: true });
-  if (coupon.used) return interaction.reply({ embeds: [new EmbedBuilder().setDescription('❌ קופון כבר מומש.').setColor(0xED4245)], ephemeral: true });
-  if (coupon.userId !== interaction.user.id) return interaction.reply({ embeds: [new EmbedBuilder().setDescription('❌ קופון לא שייך אליך.').setColor(0xED4245)], ephemeral: true });
-  coupon.used = true;
-  coupon.redeemedAt = new Date().toISOString();
-  await interaction.reply({ embeds: [new EmbedBuilder()
-    .setTitle('🎁 קופון מומש!').setDescription(`✅ \`${code}\` מומש!\n\n**פרס:** ${coupon.reward}\n\nפתח טיקט לקבלה.`)
-    .setColor(0x57F287).setTimestamp()
-  ], ephemeral: true });
-  await sendLog(interaction.client, new EmbedBuilder()
-    .setTitle('🎟️ קופון מומש')
-    .addFields({ name: 'קוד', value: `\`${code}\``, inline: true }, { name: 'משתמש', value: `<@${interaction.user.id}>`, inline: true }, { name: 'פרס', value: coupon.reward, inline: true })
-    .setColor(0xFEE75C).setTimestamp()
-  );
-}
-
-async function checkCoupon(interaction) {
-  const code = interaction.options.getString('code').toUpperCase();
-  const coupon = DB.coupons[code];
-  if (!coupon) return interaction.reply({ embeds: [new EmbedBuilder().setDescription('❌ קוד לא קיים.').setColor(0xED4245)], ephemeral: true });
-  await interaction.reply({ embeds: [new EmbedBuilder()
-    .setTitle(`🎟️ קופון: \`${code}\``)
-    .addFields(
-      { name: '👤 עבור', value: `<@${coupon.userId}>`, inline: true },
-      { name: '🎁 פרס', value: coupon.reward, inline: true },
-      { name: '📊 סטטוס', value: coupon.used ? '❌ מומש' : '✅ פעיל', inline: true },
-      { name: '🛠️ נוצר על ידי', value: `<@${coupon.createdBy}>`, inline: true },
-    ).setColor(coupon.used ? 0xED4245 : 0x57F287).setTimestamp()
-  ], ephemeral: true });
-}
-
-// ═══════════════════════════════════════════════════════
 //  SYSTEM 7 — LOGS
 // ═══════════════════════════════════════════════════════
 async function logMemberAdd(member, client) {
@@ -937,107 +703,6 @@ async function logMessageDelete(msg, client) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 8 — WARRANTY
-// ═══════════════════════════════════════════════════════
-async function addWarranty(interaction) {
-  const user = interaction.options.getUser('user');
-  const item = interaction.options.getString('item');
-  const duration = interaction.options.getString('duration');
-  const id = randomId(8);
-  if (!DB.warranties[user.id]) DB.warranties[user.id] = [];
-  DB.warranties[user.id].push({ id, item, duration, createdAt: new Date().toISOString(), createdBy: interaction.user.id });
-  await interaction.reply({ embeds: [new EmbedBuilder()
-    .setTitle('🛡️ אחריות נוספה')
-    .addFields(
-      { name: '🆔 מזהה', value: id, inline: true },
-      { name: '👤 משתמש', value: `<@${user.id}>`, inline: true },
-      { name: '📦 מוצר', value: item, inline: true },
-      { name: '⏳ משך', value: duration, inline: true },
-    ).setColor(0x57F287).setTimestamp()
-  ]});
-  try {
-    await user.send({ embeds: [new EmbedBuilder()
-      .setTitle('🛡️ קיבלת אחריות!').setDescription(`אחריות חדשה בשרת **${interaction.guild.name}**`)
-      .addFields({ name: '🆔', value: id, inline: true }, { name: '📦', value: item, inline: true }, { name: '⏳', value: duration, inline: true })
-      .setColor(0x5865F2).setTimestamp()
-    ]});
-  } catch {}
-}
-
-async function showMyWarranty(interaction) {
-  const ws = DB.warranties[interaction.user.id];
-  if (!ws || ws.length === 0) return interaction.reply({ embeds: [new EmbedBuilder().setDescription('🛡️ אין לך אחריות.').setColor(0x5865F2)], ephemeral: true });
-  const embed = new EmbedBuilder().setTitle('🛡️ האחריות שלי').setColor(0x5865F2);
-  ws.forEach((w, i) => embed.addFields({ name: `#${i + 1} — ${w.id}`, value: `📦 ${w.item}\n⏳ ${w.duration}\n📅 ${new Date(w.createdAt).toLocaleDateString('he-IL')}`, inline: true }));
-  await interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-async function checkWarranty(interaction) {
-  const user = interaction.options.getUser('user');
-  const ws = DB.warranties[user.id];
-  if (!ws || ws.length === 0) return interaction.reply({ embeds: [new EmbedBuilder().setDescription(`🛡️ אין אחריות עבור <@${user.id}>.`).setColor(0x5865F2)], ephemeral: true });
-  const embed = new EmbedBuilder().setTitle(`🛡️ אחריות של ${user.tag}`).setColor(0x5865F2);
-  ws.forEach((w, i) => embed.addFields({ name: `#${i + 1} — ${w.id}`, value: `📦 ${w.item}\n⏳ ${w.duration}\n📅 ${new Date(w.createdAt).toLocaleDateString('he-IL')}`, inline: true }));
-  await interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-// ═══════════════════════════════════════════════════════
-//  SYSTEM 9 — PROOFS PANEL
-// ═══════════════════════════════════════════════════════
-async function setupProofs(interaction, client) {
-  await interaction.deferReply({ ephemeral: false });
-
-  const guild = interaction.guild;
-  const buildEmbed = (pm) => {
-    const list = pm && pm.length > 0
-      ? pm.map(m => `• <@${m.id}>`).join('\n')
-      : 'אין חברים עם רול זה כרגע.';
-
-    return new EmbedBuilder()
-      .setTitle('📊 אנשים שקיבלו עיצוב  ')
-      .setDescription(list)
-      .setColor(0x5865F2)
-      .addFields({ name: '👥 סה״כ חברים פעילים', value: `${pm ? pm.length : 0} חברים` })
-      .setFooter({ text: 'מתעדכן אוטומטית בכל 5 דקות' })
-      .setTimestamp();
-  };
-
-  try {
-    const role = await guild.roles.fetch(CONFIG.PROOF_ROLE_ID);
-    let proofMembers = [];
-
-    if (role) {
-      const fetchedMembers = await role.guild.members.fetch();
-      proofMembers = fetchedMembers.filter(m => m.roles.cache.has(CONFIG.PROOF_ROLE_ID)).map(m => m);
-    }
-
-    const msg = await interaction.channel.send({ embeds: [buildEmbed(proofMembers)] });
-    await interaction.editReply({ content: '✅ פאנל החברים נשלח בהצלחה לערוץ!' });
-
-    const intervalId = setInterval(async () => {
-      try {
-        const freshMsg = await interaction.channel.messages.fetch(msg.id).catch(() => null);
-        if (!freshMsg) return clearInterval(intervalId);
-
-        const freshRole = await guild.roles.fetch(CONFIG.PROOF_ROLE_ID);
-        let freshList = [];
-        if (freshRole) {
-          const fetched = await freshRole.guild.members.fetch();
-          freshList = fetched.filter(m => m.roles.cache.has(CONFIG.PROOF_ROLE_ID)).map(m => m);
-        }
-        await msg.edit({ embeds: [buildEmbed(freshList)] });
-      } catch (err) {
-        if (err.code === 429) clearInterval(intervalId);
-      }
-    }, 5 * 60 * 1000);
-
-  } catch (error) {
-    console.error('שגיאה במהלך הפעלת הפאנל:', error);
-    await interaction.editReply({ content: '❌ אירעה שגיאה זמנית זיהוי המשתמשים. אנא נסה שוב בעוד דקה.' });
-  }
-}
-
-// ═══════════════════════════════════════════════════════
 //  SYSTEM 10 — ACTIVITY STATUS
 // ═══════════════════════════════════════════════════════
 function startActivityRotation(client) {
@@ -1048,12 +713,9 @@ function startActivityRotation(client) {
       if (!guild) return;
 
       const total = guild.memberCount;
-      const role = guild.roles.cache.get(CONFIG.PROOF_ROLE_ID) || await guild.roles.fetch(CONFIG.PROOF_ROLE_ID);
-      const proofCount = role ? role.members.size : 0;
 
       const statuses = [
         { name: 'Custom Status', state: `👥 ${total} חברים בשרת`, type: ActivityType.Custom },
-        { name: 'Custom Status', state: `✅ ${proofCount} עם רול הוכחות`, type: ActivityType.Custom },
         { name: 'Custom Status', state: '🛡️ All Reserved Save For VOrino', type: ActivityType.Custom },
       ];
 
@@ -1070,33 +732,8 @@ function startActivityRotation(client) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 11 — DROPS / GIVEAWAYS / GUESS
+//  SYSTEM 11 — GIVEAWAYS
 // ═══════════════════════════════════════════════════════
-async function createDrop(interaction) {
-  const prize = interaction.options.getString('prize');
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('drop_claim').setLabel('🎁 תפוס!').setStyle(ButtonStyle.Success)
-  );
-  const msg = await interaction.channel.send({
-    embeds: [new EmbedBuilder().setTitle('🎁 DROP!').setDescription(`**${prize}**\n\nלחץ מהר לתפוס! 🏃`).setColor(0xFEE75C).setFooter({ text: 'ראשון שלוחץ — זוכה!' }).setTimestamp()],
-    components: [row]
-  });
-  DB.drops[msg.id] = { prize, claimed: false, channelId: interaction.channelId };
-  await interaction.reply({ content: '✅ דרופ נוצר!', ephemeral: true });
-}
-
-async function handleDropClaim(interaction, client) {
-  const drop = DB.drops[interaction.message.id];
-  if (!drop) return interaction.reply({ content: '❌ דרופ לא נמצא.', ephemeral: true });
-  if (drop.claimed) return interaction.reply({ content: '❌ הדרופ כבר נתפס!', ephemeral: true });
-  drop.claimed = true;
-  drop.winner = interaction.user.id;
-  await interaction.update({
-    embeds: [new EmbedBuilder().setTitle('🎁 הדרופ נתפס!').setDescription(`**${drop.prize}**\n\n🏆 <@${interaction.user.id}> תפס!`).setColor(0x57F287).setTimestamp()],
-    components: []
-  });
-}
-
 async function createGiveaway(interaction) {
   const prize = interaction.options.getString('prize');
   const winners = interaction.options.getInteger('winners');
@@ -1158,48 +795,6 @@ async function endGiveawayCommand(interaction) {
   if (!DB.giveaways[msgId]) return interaction.reply({ content: '❌ הגרלה לא נמצאה.', ephemeral: true });
   await interaction.reply({ content: '⏳ מסיים...', ephemeral: true });
   await endGiveawayAuto(msgId, interaction.channel, interaction.client);
-}
-
-async function startGuessGame(interaction) {
-  const prize = interaction.options.getString('prize');
-  const max = interaction.options.getInteger('max') || 100;
-  const number = Math.floor(Math.random() * max) + 1;
-  DB.guessGames[interaction.channelId] = { number, prize, createdBy: interaction.user.id, max };
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('guess_number').setLabel('🔢 נחש!').setStyle(ButtonStyle.Primary)
-  );
-  await interaction.channel.send({
-    embeds: [new EmbedBuilder().setTitle('🔢 נחש את המספר!').setDescription(`**פרס:** ${prize}\n\nמספר בין **1** ל **${max}**\n\nלחץ לנחש!`).setColor(0x5865F2).setFooter({ text: 'ראשון שנחש נכון — זוכה!' }).setTimestamp()],
-    components: [row]
-  });
-  await interaction.reply({ content: '✅ משחק נוצר!', ephemeral: true });
-}
-
-async function handleGuessButton(interaction) {
-  const game = DB.guessGames[interaction.channelId];
-  if (!game) return interaction.reply({ content: '❌ אין משחק פעיל.', ephemeral: true });
-  if (game.ended) return interaction.reply({ content: '❌ המשחק הסתיים.', ephemeral: true });
-  const modal = new ModalBuilder().setCustomId('guess_modal').setTitle('🔢 נחש את המספר');
-  modal.addComponents(new ActionRowBuilder().addComponents(
-    new TextInputBuilder().setCustomId('guess_input').setLabel(`מספר בין 1 ל ${game.max}`).setStyle(TextInputStyle.Short).setRequired(true)
-  ));
-  await interaction.showModal(modal);
-}
-
-async function handleGuessModal(interaction) {
-  const game = DB.guessGames[interaction.channelId];
-  if (!game || game.ended) return interaction.reply({ content: '❌ אין משחק פעיל.', ephemeral: true });
-  const guess = parseInt(interaction.fields.getTextInputValue('guess_input'));
-  if (isNaN(guess)) return interaction.reply({ content: '❌ מספר לא תקין.', ephemeral: true });
-  if (guess === game.number) {
-    game.ended = true;
-    await interaction.reply({ embeds: [new EmbedBuilder()
-      .setTitle('🏆 ניצחת!').setDescription(`<@${interaction.user.id}> ניחש! המספר היה **${game.number}**\n\n🎁 **פרס:** ${game.prize}`)
-      .setColor(0x57F287).setTimestamp()
-    ]});
-  } else {
-    await interaction.reply({ content: `❌ לא נכון! ${guess < game.number ? '📈 גבוה יותר!' : '📉 נמוך יותר!'}`, ephemeral: true });
-  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1442,22 +1037,9 @@ client.on('interactionCreate', async (interaction) => {
       const cmd = interaction.commandName;
       if (cmd === 'setup-tickets') return setupTickets(interaction);
       if (cmd === 'setup-verify') return setupVerify(interaction);
-      if (cmd === 'addorder') return addOrder(interaction);
-      if (cmd === 'orders') return showOrders(interaction);
-      if (cmd === 'myorders') return showMyOrders(interaction);
-      if (cmd === 'orderstats') return showOrderStats(interaction);
       if (cmd === 'broadcast') return broadcast(interaction);
       if (cmd === 'dmall') return dmAll(interaction, client);
-      if (cmd === 'createcoupon') return createCoupon(interaction);
-      if (cmd === 'redeemcoupon') return redeemCoupon(interaction);
-      if (cmd === 'checkcoupon') return checkCoupon(interaction);
-      if (cmd === 'addwarranty') return addWarranty(interaction);
-      if (cmd === 'mywarranty') return showMyWarranty(interaction);
-      if (cmd === 'checkwarranty') return checkWarranty(interaction);
-      if (cmd === 'setup-proofs') return setupProofs(interaction, client);
-      if (cmd === 'drop') return createDrop(interaction);
       if (cmd === 'giveaway') return createGiveaway(interaction);
-      if (cmd === 'guessnumber') return startGuessGame(interaction);
       if (cmd === 'endgiveaway') return endGiveawayCommand(interaction);
       if (cmd === 'antilink') return handleAntiLinkCommand(interaction);
     }
@@ -1467,9 +1049,7 @@ client.on('interactionCreate', async (interaction) => {
       if (id === 'ticket_open') return handleTicketOpen(interaction, client);
       if (['ticket_close','ticket_transcript','ticket_rename','ticket_claim'].includes(id)) return handleTicketAction(interaction, client);
       if (id === 'verify_start') return handleVerifyStart(interaction, client);
-      if (id === 'drop_claim') return handleDropClaim(interaction, client);
       if (id === 'giveaway_enter') return handleGiveawayEnter(interaction);
-      if (id === 'guess_number') return handleGuessButton(interaction);
     }
 
     if (interaction.isStringSelectMenu()) {
@@ -1481,7 +1061,6 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isModalSubmit()) {
       const id = interaction.customId;
       if (id === 'ticket_rename_modal') return handleTicketRenameModal(interaction);
-      if (id === 'guess_modal') return handleGuessModal(interaction);
     }
   } catch (err) {
     console.error('Interaction error:', err);
