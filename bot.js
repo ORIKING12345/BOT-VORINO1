@@ -208,6 +208,9 @@ const COMMANDS = [
     .addChannelOption(o => o.setName('channel').setDescription('ערוץ').setRequired(true)),
   new SlashCommandBuilder().setName('set-server-owner-role').setDescription('👑 הגדר רול לבעלי שרתים [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addRoleOption(o => o.setName('role').setDescription('הרול').setRequired(true)),
+  new SlashCommandBuilder().setName('set-discord-israel-channel').setDescription('🔗 הגדר את ערוץ Discord Israel [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addChannelOption(o => o.setName('channel').setDescription('הערוץ').setRequired(true)),
+  new SlashCommandBuilder().setName('check-discord-israel-link').setDescription('🔍 בדוק עכשיו אם הקישור ל-Discord Israel קיים [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ];
 
 // ═══════════════════════════════════════════════════════
@@ -240,7 +243,7 @@ async function handleTicketCategory(interaction, client) {
   const guild = interaction.guild;
   const user = interaction.user;
   await interaction.deferUpdate();
-  const channelName = `ticket-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}-${randomId(4)}`;
+  const channelName = `ticket-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
   let ticketChannel;
   try {
     ticketChannel = await guild.channels.create({
@@ -811,7 +814,7 @@ async function handleSlAddModal(interaction, client) {
   }
 
   const safeName = name.toLowerCase().replace(/[^a-z0-9א-ת]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 30) || 'server';
-  const channelName = `${safeName}-${randomId(4)}`;
+  const channelName = safeName;
 
   // יצירת הערוץ בקטגוריה המתאימה
   let serverChannel;
@@ -864,6 +867,9 @@ async function handleSlAddModal(interaction, client) {
     try { await interaction.member.roles.add(CONFIG.SERVER_OWNER_ROLE_ID); } catch (e) { console.error('Server owner role add error:', e); }
   }
 
+  // ── בדיקת/יצירת הקישור הקבוע בערוץ Discord Israel ──
+  await ensureDiscordIsraelLink(client, serverData, cat);
+
   // לוג
   await sendLog(client, new EmbedBuilder()
     .setTitle('🌐 שרת חדש נוסף לרשימה')
@@ -887,15 +893,20 @@ async function handleSlAddModal(interaction, client) {
 
 // בניית embed לשרת
 function buildServerEmbed(serverData, cat, ownerUser) {
+  const suspendedNote = serverData.suspended
+    ? `\n\n🚫 **השרת מושעה** — הקישור ל-Discord Israel חסר/נמחק. הצבעות חסומות עד לתיקון.`
+    : '';
   const embed = new EmbedBuilder()
-    .setTitle(`${cat.emoji} ${serverData.name}`)
+    .setTitle(`${cat.emoji} ${serverData.name}${serverData.suspended ? ' 🚫' : ''}`)
     .setDescription(
       `> ${serverData.description}\n\n` +
       `🔗 **קישור:** [לחץ להצטרפות](${serverData.link.startsWith('http') ? serverData.link : 'https://' + serverData.link})\n` +
       `👑 **בעלים:** <@${serverData.ownerId}>\n` +
-      `📂 **קטגוריה:** ${cat.emoji} ${cat.name}`
+      `📂 **קטגוריה:** ${cat.emoji} ${cat.name}\n` +
+      `🇮🇱 **Discord Israel:** ${DISCORD_ISRAEL.inviteLink}` +
+      suspendedNote
     )
-    .setColor(cat.color)
+    .setColor(serverData.suspended ? 0x747F8D : cat.color)
     .addFields(
       { name: '⬆️ הצבעות', value: `**${serverData.votes}**`, inline: true },
       { name: '📅 נוסף', value: `<t:${Math.floor(new Date(serverData.createdAt).getTime() / 1000)}:R>`, inline: true },
@@ -912,6 +923,10 @@ async function handleSlVote(interaction, client) {
   const channelId = interaction.customId.replace('sl_vote_', '');
   const serverData = DB.serverList[channelId];
   if (!serverData) return interaction.reply({ content: '❌ שרת לא נמצא.', ephemeral: true });
+
+  if (serverData.suspended) {
+    return interaction.reply({ embeds: [new EmbedBuilder().setTitle('🚫 הצבעה חסומה').setDescription('השרת מושעה כרגע כי הקישור ל-Discord Israel חסר/נמחק. ההצבעה תיפתח שוב אחרי שהקישור יתוקן.').setColor(0xED4245)], ephemeral: true });
+  }
 
   if (serverData.ownerId === interaction.user.id) {
     return interaction.reply({ embeds: [new EmbedBuilder().setDescription('❌ אינך יכול להצביע לשרת שלך עצמך.').setColor(0xED4245)], ephemeral: true });
@@ -1091,6 +1106,7 @@ async function handleServerListCommand(interaction, client) {
         { name: '📅 נוסף', value: `<t:${Math.floor(new Date(serverData.createdAt).getTime() / 1000)}:F>`, inline: true },
         { name: '🔗 קישור', value: serverData.link, inline: false },
         { name: '📝 תיאור', value: serverData.description.substring(0, 200), inline: false },
+        { name: '🇮🇱 סטטוס Discord Israel', value: serverData.suspended ? '🚫 מושעה — קישור חסר' : '✅ תקין', inline: false },
       ).setColor(cat.color).setTimestamp()
     ], ephemeral: true });
 
@@ -1123,6 +1139,196 @@ async function updateServerMessage(channelId, client) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  SYSTEM 15 — DISCORD ISRAEL LINK GUARD
+// ═══════════════════════════════════════════════════════
+//
+// כל שרת שנפתח ברשימה מקבל גם הודעה נפרדת בערוץ "Discord Israel"
+// עם הקישור הקבוע שלו, וגם את אותו קישור משולב בתוך ה-embed של השרת
+// (ראה buildServerEmbed). הבוט בודק שההודעה הזו עדיין קיימת — גם
+// ברגע ההוספה וגם בבדיקה תקופתית. אם היא נמחקה/חסרה, השרת מסומן
+// כ"מושעה": הצבעות נחסמות וה-embed מציג תג מצב, עד שההודעה תיווצר
+// מחדש (אוטומטית בבדיקה הבאה, או ידנית עם /check-discord-israel-link).
+
+const DISCORD_ISRAEL = {
+  // קישור ההזמנה הקבוע ל-Discord Israel. אפשר לשנות אם הקישור מתחלף.
+  inviteLink: 'https://discord.gg/csyTeG8N2',
+  // ה-ID של ערוץ "Discord Israel" עצמו בשרת שלך. יש להגדיר עם
+  // /set-discord-israel-channel או ב-ENV (DISCORD_ISRAEL_CHANNEL_ID).
+  channelId: process.env.DISCORD_ISRAEL_CHANNEL_ID || '',
+  CHECK_INTERVAL_MS: 30 * 60 * 1000, // בדיקה תקופתית כל 30 דקות
+};
+
+// בודק אם קיימת בערוץ Discord Israel הודעה ששייכת לשרת הנתון (לפי tag מוטמע)
+async function findDiscordIsraelMessage(client, serverData) {
+  if (!DISCORD_ISRAEL.channelId) return null;
+  let channel;
+  try {
+    channel = await client.channels.fetch(DISCORD_ISRAEL.channelId);
+  } catch {
+    return null;
+  }
+  if (!channel) return null;
+
+  // אם יש לנו כבר messageId שמור, ננסה לשלוף אותו ישירות (מהיר וזול)
+  if (serverData.discordIsraelMessageId) {
+    try {
+      const msg = await channel.messages.fetch(serverData.discordIsraelMessageId);
+      if (msg) return msg;
+    } catch {
+      // ההודעה נמחקה / לא קיימת יותר
+    }
+  }
+
+  // גיבוי: לחפש בהיסטוריה האחרונה הודעה עם ה-tag הסודי של השרת הזה
+  try {
+    const tag = `<!-- sl:${serverData.channelId} -->`;
+    const recent = await channel.messages.fetch({ limit: 100 });
+    const found = recent.find(m => m.author?.id === client.user.id && m.content.includes(tag));
+    return found || null;
+  } catch {
+    return null;
+  }
+}
+
+// יוצר/מבטיח שקיימת הודעה בערוץ Discord Israel עם הקישור הקבוע של השרת
+async function ensureDiscordIsraelLink(client, serverData, cat) {
+  if (!DISCORD_ISRAEL.channelId) {
+    await sendLog(client, new EmbedBuilder()
+      .setTitle('⚠️ Discord Israel — ערוץ לא מוגדר')
+      .setDescription(`לא ניתן ליצור קישור ל-Discord Israel עבור **${serverData.name}** כי לא הוגדר ערוץ.\nהגדר עם \`/set-discord-israel-channel\`.`)
+      .setColor(0xFEE75C).setTimestamp());
+    return false;
+  }
+
+  const existingMsg = await findDiscordIsraelMessage(client, serverData);
+  if (existingMsg) {
+    serverData.discordIsraelMessageId = existingMsg.id;
+    if (serverData.suspended) await unsuspendServer(serverData, client);
+    return true;
+  }
+
+  // לא קיימת — ניצור הודעה חדשה
+  let channel;
+  try {
+    channel = await client.channels.fetch(DISCORD_ISRAEL.channelId);
+  } catch {
+    channel = null;
+  }
+  if (!channel) {
+    await sendLog(client, new EmbedBuilder()
+      .setTitle('🚨 Discord Israel — ערוץ לא נמצא')
+      .setDescription(`ה-ID שמוגדר לערוץ Discord Israel (\`${DISCORD_ISRAEL.channelId}\`) שגוי או שהערוץ נמחק.`)
+      .setColor(0xED4245).setTimestamp());
+    await suspendServer(serverData, client, 'ערוץ Discord Israel לא נמצא');
+    return false;
+  }
+
+  const tag = `<!-- sl:${serverData.channelId} -->`;
+  const embed = new EmbedBuilder()
+    .setTitle(`🇮🇱 ${cat.emoji} ${serverData.name}`)
+    .setDescription(
+      `קישור קבוע ל-**Discord Israel**:\n${DISCORD_ISRAEL.inviteLink}\n\n` +
+      `🔗 **קישור השרת:** [לחץ להצטרפות](${serverData.link.startsWith('http') ? serverData.link : 'https://' + serverData.link})\n` +
+      `📍 **ערוץ ברשימה:** <#${serverData.channelId}>`
+    )
+    .setColor(cat.color)
+    .setFooter({ text: 'VOrino • Discord Israel Link Guard' })
+    .setTimestamp();
+
+  try {
+    const msg = await channel.send({ content: tag, embeds: [embed] });
+    serverData.discordIsraelMessageId = msg.id;
+    if (serverData.suspended) await unsuspendServer(serverData, client);
+    return true;
+  } catch (e) {
+    console.error('ensureDiscordIsraelLink send error:', e);
+    await sendLog(client, new EmbedBuilder()
+      .setTitle('🚨 Discord Israel — שליחה נכשלה')
+      .setDescription(`לא הצלחתי לשלוח הודעה בערוץ Discord Israel עבור **${serverData.name}**. ודא שלבוט יש הרשאת שליחת הודעות בערוץ.`)
+      .setColor(0xED4245).setTimestamp());
+    await suspendServer(serverData, client, 'שליחת הודעה לערוץ Discord Israel נכשלה');
+    return false;
+  }
+}
+
+async function suspendServer(serverData, client, reasonText) {
+  if (serverData.suspended) return; // כבר מושעה, אין צורך לחזור על הלוג
+  serverData.suspended = true;
+  await sendLog(client, new EmbedBuilder()
+    .setTitle('🚫 שרת הושעה')
+    .setDescription(`השרת **${serverData.name}** הושעה אוטומטית — הקישור ל-Discord Israel חסר/נמחק.`)
+    .addFields(
+      { name: '📍 ערוץ', value: `<#${serverData.channelId}>`, inline: true },
+      { name: '👤 בעלים', value: `<@${serverData.ownerId}>`, inline: true },
+      { name: '📝 סיבה', value: reasonText || 'לא ידוע', inline: false },
+    ).setColor(0xED4245).setTimestamp());
+  await updateServerMessage(serverData.channelId, client);
+}
+
+async function unsuspendServer(serverData, client) {
+  serverData.suspended = false;
+  await sendLog(client, new EmbedBuilder()
+    .setTitle('✅ שרת שוחזר')
+    .setDescription(`השרת **${serverData.name}** שוחזר — הקישור ל-Discord Israel נמצא/נוצר מחדש. הצבעות נפתחו שוב.`)
+    .addFields({ name: '📍 ערוץ', value: `<#${serverData.channelId}>`, inline: true })
+    .setColor(0x57F287).setTimestamp());
+  await updateServerMessage(serverData.channelId, client);
+}
+
+// בדיקה תקופתית עבור כל השרתים ברשימה
+async function runDiscordIsraelCheck(client) {
+  const servers = Object.values(DB.serverList);
+  if (servers.length === 0) return;
+
+  if (!DISCORD_ISRAEL.channelId) {
+    await sendLog(client, new EmbedBuilder()
+      .setTitle('⚠️ Discord Israel — בדיקה תקופתית דולגה')
+      .setDescription('לא הוגדר ערוץ Discord Israel. הגדר עם `/set-discord-israel-channel`.')
+      .setColor(0xFEE75C).setTimestamp());
+    return;
+  }
+
+  for (const serverData of servers) {
+    try {
+      const found = await findDiscordIsraelMessage(client, serverData);
+      if (found) {
+        serverData.discordIsraelMessageId = found.id;
+        if (serverData.suspended) await unsuspendServer(serverData, client);
+      } else {
+        // לא נמצא — ננסה ליצור מחדש לפני שמשעים, ייתכן שזו רק הודעה שנמחקה בטעות
+        const cat = CONFIG.CATEGORIES[serverData.category];
+        const recreated = await ensureDiscordIsraelLink(client, serverData, cat);
+        if (!recreated) {
+          await suspendServer(serverData, client, 'בבדיקה התקופתית לא נמצא קישור Discord Israel בערוץ');
+        }
+      }
+    } catch (e) {
+      console.error('runDiscordIsraelCheck per-server error:', e);
+    }
+  }
+}
+
+function startDiscordIsraelGuard(client) {
+  // בדיקה ראשונה קצת אחרי עלות הבוט, ואז לפי המרווח שהוגדר
+  setTimeout(() => runDiscordIsraelCheck(client), 60 * 1000);
+  setInterval(() => runDiscordIsraelCheck(client), DISCORD_ISRAEL.CHECK_INTERVAL_MS);
+}
+
+async function handleSetDiscordIsraelChannel(interaction) {
+  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  const channel = interaction.options.getChannel('channel');
+  DISCORD_ISRAEL.channelId = channel.id;
+  await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ ערוץ Discord Israel הוגדר ל<#${channel.id}>\n\nמעכשיו הבוט יוודא קישור קבוע בערוץ הזה לכל שרת ברשימה.`).setColor(0x57F287)], ephemeral: true });
+}
+
+async function handleCheckDiscordIsraelLink(interaction) {
+  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  await interaction.reply({ content: '🔍 בודק עכשיו את כל השרתים ברשימה...', ephemeral: true });
+  await runDiscordIsraelCheck(interaction.client);
+  await interaction.followUp({ content: '✅ הבדיקה הסתיימה. תוצאות (אם היו שינויים) נשלחו ללוג.', ephemeral: true });
+}
+
+// ═══════════════════════════════════════════════════════
 //  CLIENT
 // ═══════════════════════════════════════════════════════
 const client = new Client({
@@ -1140,6 +1346,7 @@ const client = new Client({
 client.once('ready', () => {
   console.log(`✅ Bot is online as ${client.user.tag}`);
   startActivityRotation(client);
+  startDiscordIsraelGuard(client);
 });
 
 // ═══════════════════════════════════════════════════════
@@ -1162,6 +1369,8 @@ client.on('interactionCreate', async (interaction) => {
       if (cmd === 'setup-serverlist')     return setupServerList(interaction);
       if (cmd === 'serverlist')           return handleServerListCommand(interaction, client);
       if (cmd === 'myserver')             return handleMyServerCommand(interaction, client);
+      if (cmd === 'set-discord-israel-channel') return handleSetDiscordIsraelChannel(interaction);
+      if (cmd === 'check-discord-israel-link')  return handleCheckDiscordIsraelLink(interaction);
       if (cmd === 'set-boost-channel') {
         if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
         CONFIG.BOOST_CHANNEL_ID = interaction.options.getChannel('channel').id;
