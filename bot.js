@@ -779,7 +779,7 @@ async function handleSlAddServer(interaction) {
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sl_name').setLabel('🏷️ שם השרת').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50)),
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sl_description').setLabel('📝 תיאור השרת').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(500)),
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sl_link').setLabel('🔗 קישור קבוע לשרת (discord.gg/...)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)),
-new TextInputBuilder().setCustomId('sl_category').setLabel('סוג פנייה: fiven/shop/mc/host/other').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20),
+new TextInputBuilder().setCustomId('sl_category').setLabel('סוג פנייה: fivem/shop/mc/host/other').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20),
 
   );
   await interaction.showModal(modal);
