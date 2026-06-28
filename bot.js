@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,7 +31,7 @@ const CONFIG = {
   VOTES_LOG_CHANNEL_ID: process.env.VOTES_LOG_CHANNEL_ID || '1506383446145110218',
   SERVER_OWNER_ROLE_ID: process.env.SERVER_OWNER_ROLE_ID || '1490779090733760795',
   BLACKLISTED_FROM_LIST: [],
-  
+
   // קטגוריות סרבר ליסט
   CATEGORIES: {
     fivem:   { id: '1496093663464263760', name: 'FiveM Servers',   emoji: '🚗', color: 0xE74C3C },
@@ -179,12 +180,13 @@ const COMMANDS = [
     .addSubcommand(s => s.setName('remove-channel').setDescription('הסר ערוץ').addChannelOption(o => o.setName('channel').setDescription('ערוץ').setRequired(true)))
     .addSubcommand(s => s.setName('status').setDescription('סטטוס'))
     .addSubcommand(s => s.setName('clearwarnings').setDescription('אפס אזהרות').addUserOption(o => o.setName('user').setDescription('משתמש').setRequired(true))),
-  // ── פרסום עצמי (פוסטינג) ──
-  new SlashCommandBuilder().setName('posting').setDescription('📣 שלח הודעת פרסום עצמי [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addChannelOption(o => o.setName('channel').setDescription('ערוץ הפרסום').setRequired(true))
+  // ── פרסום עצמי (פוסטינג) — שולח לערוץ קבוע, בלי לבחור ערוץ ──
+  new SlashCommandBuilder().setName('posting').setDescription('📣 שלח הודעת פרסום עצמי לערוץ הקבוע [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(o => o.setName('title').setDescription('כותרת').setRequired(true))
     .addStringOption(o => o.setName('description').setDescription('תיאור').setRequired(true))
     .addStringOption(o => o.setName('color').setDescription('צבע hex (ברירת מחדל: כחול)')),
+  new SlashCommandBuilder().setName('set-posting-channel').setDescription('📣 הגדר את ערוץ הפרסום העצמי הקבוע [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addChannelOption(o => o.setName('channel').setDescription('הערוץ').setRequired(true)),
   // ── סרבר ליסט — פאנל ──
   new SlashCommandBuilder().setName('setup-serverlist').setDescription('🌐 שלח את פאנל הוספת שרת לרשימה [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   // ── סרבר ליסט — ניהול צוות ──
@@ -239,15 +241,21 @@ async function handleTicketCategory(interaction, client) {
   const user = interaction.user;
   await interaction.deferUpdate();
   const channelName = `ticket-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}-${randomId(4)}`;
-  const ticketChannel = await guild.channels.create({
-    name: channelName, type: ChannelType.GuildText,
-    parent: CONFIG.TICKET_CATEGORY_ID || null,
-    permissionOverwrites: [
-      { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-      { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-      { id: CONFIG.TEAM_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-    ],
-  });
+  let ticketChannel;
+  try {
+    ticketChannel = await guild.channels.create({
+      name: channelName, type: ChannelType.GuildText,
+      parent: CONFIG.TICKET_CATEGORY_ID || null,
+      permissionOverwrites: [
+        { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: CONFIG.TEAM_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+      ],
+    });
+  } catch (e) {
+    console.error('Ticket channel create error:', e);
+    return interaction.followUp({ content: '❌ שגיאה ביצירת הטיקט. ודא שיש לבוט הרשאת "ניהול ערוצים" ושקטגוריית הטיקטים מוגדרת כראוי.', ephemeral: true });
+  }
   DB.tickets[ticketChannel.id] = { userId: user.id, category, name: channelName, createdAt: new Date().toISOString() };
   const teamRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('ticket_close').setLabel('🔒 סגור').setStyle(ButtonStyle.Danger),
@@ -385,15 +393,29 @@ async function dmAll(interaction, client) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 6 — POSTING (פרסום עצמי)
+//  SYSTEM 6 — POSTING (פרסום עצמי) — שולח אוטומטית לערוץ קבוע, אין צורך לבחור ערוץ
 // ═══════════════════════════════════════════════════════
-async function handlePosting(interaction) {
+async function handlePosting(interaction, client) {
   if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
-  const channel = interaction.options.getChannel('channel');
-  const title   = interaction.options.getString('title');
-  const desc    = interaction.options.getString('description');
+
+  if (!CONFIG.PROMO_CHANNEL_ID) {
+    return interaction.reply({ content: '❌ לא הוגדר ערוץ פרסום קבוע. הגדר אותו עם /set-posting-channel ואז נסה שוב.', ephemeral: true });
+  }
+
+  const title    = interaction.options.getString('title');
+  const desc     = interaction.options.getString('description');
   const colorStr = interaction.options.getString('color') || '#5865F2';
-  const color = parseInt(colorStr.replace('#', ''), 16) || 0x5865F2;
+  const color    = parseInt(colorStr.replace('#', ''), 16) || 0x5865F2;
+
+  let channel;
+  try {
+    channel = await client.channels.fetch(CONFIG.PROMO_CHANNEL_ID);
+  } catch {
+    channel = null;
+  }
+  if (!channel) {
+    return interaction.reply({ content: '❌ ערוץ הפרסום שהוגדר לא נמצא (אולי נמחק). הגדר ערוץ חדש עם /set-posting-channel.', ephemeral: true });
+  }
 
   const embed = new EmbedBuilder()
     .setTitle(`📣 ${title}`)
@@ -407,8 +429,21 @@ async function handlePosting(interaction) {
     .setFooter({ text: 'VOrino • Self Promotion', iconURL: interaction.guild.iconURL() })
     .setTimestamp();
 
-  await channel.send({ embeds: [embed] });
+  try {
+    await channel.send({ embeds: [embed] });
+  } catch (e) {
+    console.error('Posting send error:', e);
+    return interaction.reply({ content: '❌ שליחה נכשלה. בדוק שלבוט יש הרשאת שליחת הודעות בערוץ שהוגדר.', ephemeral: true });
+  }
+
   await interaction.reply({ content: `✅ הודעת הפרסום נשלחה ל<#${channel.id}>`, ephemeral: true });
+}
+
+async function handleSetPostingChannel(interaction) {
+  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  const channel = interaction.options.getChannel('channel');
+  CONFIG.PROMO_CHANNEL_ID = channel.id;
+  await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ ערוץ הפרסום העצמי הקבוע הוגדר ל<#${channel.id}>\n\nמעכשיו /posting ישלח אוטומטית לערוץ הזה.`).setColor(0x57F287)], ephemeral: true });
 }
 
 // ═══════════════════════════════════════════════════════
@@ -684,6 +719,14 @@ async function handleAntiLinkCommand(interaction) {
 
 // פאנל ראשי
 async function setupServerList(interaction) {
+  const bannerPath = path.join(__dirname, 'assets', 'serverlist-banner.png');
+  let bannerAttachment = null;
+  try {
+    bannerAttachment = new AttachmentBuilder(bannerPath, { name: 'serverlist-banner.png' });
+  } catch (e) {
+    console.error('Banner load error:', e);
+  }
+
   const embed = new EmbedBuilder()
     .setTitle('🌐 רשימת השרתים — VOrino Server List')
     .setDescription(
@@ -696,16 +739,16 @@ async function setupServerList(interaction) {
       '🖥️ **Hosting Servers** — שירותי אירוח\n' +
       '🌐 **Other Servers** — אחר\n\n' +
       '**📋 מה צריך לספק?**\n' +
-      '• שם השרת | תיאור | קישור קבוע | שם בעלים | ID בעלים\n\n' +
+      '• שם השרת | תיאור | קישור קבוע | קטגוריה\n\n' +
       '**⚡ איך עובד מערכת ההצבעות?**\n' +
       'ככל שיש לשרת שלך יותר הצבעות — הוא עולה גבוה יותר ברשימה!\n' +
       'כל אחד יכול להצביע לשרת אחת ל-24 שעות.'
     )
     .setColor(0x5865F2)
-    .setThumbnail(interaction.guild.iconURL())
-    .setImage('https://i.imgur.com/placeholder.png') // ניתן להחליף לתמונת באנר
-    .setFooter({ text: '🌐 VOrino Server List • לחץ על הכפתור למטה להוספת שרתך', iconURL: interaction.guild.iconURL() })
-    .setTimestamp();
+    .setThumbnail(interaction.guild.iconURL());
+
+  if (bannerAttachment) embed.setImage('attachment://serverlist-banner.png');
+  embed.setFooter({ text: '🌐 VOrino Server List • לחץ על הכפתור למטה להוספת שרתך', iconURL: interaction.guild.iconURL() }).setTimestamp();
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('sl_add_server').setLabel('➕ הוסף את השרת שלך').setStyle(ButtonStyle.Success).setEmoji('🌐'),
@@ -713,7 +756,10 @@ async function setupServerList(interaction) {
     new ButtonBuilder().setCustomId('sl_my_server').setLabel('✏️ ערוך את השרת שלי').setStyle(ButtonStyle.Secondary),
   );
 
-  await interaction.channel.send({ embeds: [embed], components: [row] });
+  const payload = { embeds: [embed], components: [row] };
+  if (bannerAttachment) payload.files = [bannerAttachment];
+
+  await interaction.channel.send(payload);
   await interaction.reply({ content: '✅ פאנל הסרבר ליסט נשלח!', ephemeral: true });
 }
 
@@ -733,7 +779,6 @@ async function handleSlAddServer(interaction) {
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sl_name').setLabel('🏷️ שם השרת').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50)),
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sl_description').setLabel('📝 תיאור השרת').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(500)),
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sl_link').setLabel('🔗 קישור קבוע לשרת (discord.gg/...)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)),
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sl_owner_id').setLabel('🆔 ID של בעל השרת').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(30)),
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sl_category').setLabel('📂 קטגוריה: fivem / shop / minecraft / hosting / other').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20)),
   );
   await interaction.showModal(modal);
@@ -741,20 +786,31 @@ async function handleSlAddServer(interaction) {
 
 // עיבוד מודאל הוספת שרת
 async function handleSlAddModal(interaction, client) {
-  const name       = interaction.fields.getTextInputValue('sl_name');
-  const desc       = interaction.fields.getTextInputValue('sl_description');
-  const link       = interaction.fields.getTextInputValue('sl_link');
-  const ownerId    = interaction.fields.getTextInputValue('sl_owner_id').trim();
-  const catRaw     = interaction.fields.getTextInputValue('sl_category').toLowerCase().trim();
+  const name   = interaction.fields.getTextInputValue('sl_name');
+  const desc   = interaction.fields.getTextInputValue('sl_description');
+  const link   = interaction.fields.getTextInputValue('sl_link');
+  const catRaw = interaction.fields.getTextInputValue('sl_category').toLowerCase().trim();
 
   const validCats = Object.keys(CONFIG.CATEGORIES);
   const category = validCats.find(c => catRaw.includes(c)) || 'other';
   const cat = CONFIG.CATEGORIES[category];
 
+  if (!cat || !cat.id) {
+    return interaction.reply({ content: '❌ שגיאת תצורה: הקטגוריה לא מוגדרת כראוי בבוט (חסר ID). פנה למפתח הבוט.', ephemeral: true });
+  }
+
   await interaction.deferReply({ ephemeral: true });
 
   const guild = interaction.guild;
-  const channelName = `${cat.emoji}-${name.toLowerCase().replace(/[^a-z0-9א-ת]/g, '-').substring(0, 30)}`;
+
+  // בדיקת קטגוריה קיימת בשרת בפועל (לא רק בקונפיג)
+  const parentCategory = guild.channels.cache.get(cat.id);
+  if (!parentCategory) {
+    return interaction.followUp({ content: `❌ קטגוריית "${cat.name}" לא נמצאה בשרת. ה-ID שמוגדר בבוט (\`${cat.id}\`) שגוי או שהקטגוריה נמחקה. פנה לצוות לעדכון הקונפיג.`, ephemeral: true });
+  }
+
+  const safeName = name.toLowerCase().replace(/[^a-z0-9א-ת]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 30) || 'server';
+  const channelName = `${safeName}-${randomId(4)}`;
 
   // יצירת הערוץ בקטגוריה המתאימה
   let serverChannel;
@@ -770,13 +826,13 @@ async function handleSlAddModal(interaction, client) {
       ],
     });
   } catch (e) {
-    return interaction.followUp({ content: '❌ שגיאה ביצירת הערוץ. ודא שיש לבוט הרשאות מתאימות.', ephemeral: true });
+    console.error('Server list channel create error:', e);
+    return interaction.followUp({ content: '❌ שגיאה ביצירת הערוץ. ודא שיש לבוט הרשאת "ניהול ערוצים" בשרת ובקטגוריה.', ephemeral: true });
   }
 
   const serverData = {
     channelId: serverChannel.id,
     ownerId: interaction.user.id,
-    ownerMentionId: ownerId,
     name, description: desc, link, category,
     votes: 0,
     voters: {}, // userId -> timestamp
@@ -793,12 +849,18 @@ async function handleSlAddModal(interaction, client) {
     new ButtonBuilder().setCustomId(`sl_report_${serverChannel.id}`).setLabel('🚩 דווח').setStyle(ButtonStyle.Danger),
   );
 
-  const msg = await serverChannel.send({ embeds: [serverEmbed], components: [voteRow] });
+  let msg;
+  try {
+    msg = await serverChannel.send({ embeds: [serverEmbed], components: [voteRow] });
+  } catch (e) {
+    console.error('Server list message send error:', e);
+    return interaction.followUp({ content: '❌ הערוץ נוצר אך שליחת ההודעה נכשלה. פנה לצוות.', ephemeral: true });
+  }
   serverData.messageId = msg.id;
 
   // רול לבעל השרת
   if (CONFIG.SERVER_OWNER_ROLE_ID) {
-    try { await interaction.member.roles.add(CONFIG.SERVER_OWNER_ROLE_ID); } catch {}
+    try { await interaction.member.roles.add(CONFIG.SERVER_OWNER_ROLE_ID); } catch (e) { console.error('Server owner role add error:', e); }
   }
 
   // לוג
@@ -829,7 +891,7 @@ function buildServerEmbed(serverData, cat, ownerUser) {
     .setDescription(
       `> ${serverData.description}\n\n` +
       `🔗 **קישור:** [לחץ להצטרפות](${serverData.link.startsWith('http') ? serverData.link : 'https://' + serverData.link})\n` +
-      `👑 **בעלים:** <@${serverData.ownerMentionId}>\n` +
+      `👑 **בעלים:** <@${serverData.ownerId}>\n` +
       `📂 **קטגוריה:** ${cat.emoji} ${cat.name}`
     )
     .setColor(cat.color)
@@ -850,6 +912,10 @@ async function handleSlVote(interaction, client) {
   const serverData = DB.serverList[channelId];
   if (!serverData) return interaction.reply({ content: '❌ שרת לא נמצא.', ephemeral: true });
 
+  if (serverData.ownerId === interaction.user.id) {
+    return interaction.reply({ embeds: [new EmbedBuilder().setDescription('❌ אינך יכול להצביע לשרת שלך עצמך.').setColor(0xED4245)], ephemeral: true });
+  }
+
   const userId = interaction.user.id;
   const now = Date.now();
   const lastVote = serverData.voters[userId] || 0;
@@ -864,18 +930,7 @@ async function handleSlVote(interaction, client) {
   serverData.voters[userId] = now;
 
   // עדכון הודעה
-  try {
-    const ch = await client.channels.fetch(channelId);
-    const msg = await ch.messages.fetch(serverData.messageId);
-    const cat = CONFIG.CATEGORIES[serverData.category];
-    await msg.edit({
-      embeds: [buildServerEmbed(serverData, cat, null)],
-      components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`sl_vote_${channelId}`).setLabel(`⬆️ הצבע (${serverData.votes})`).setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`sl_report_${channelId}`).setLabel('🚩 דווח').setStyle(ButtonStyle.Danger),
-      )]
-    });
-  } catch {}
+  await updateServerMessage(channelId, client);
 
   await interaction.reply({ embeds: [new EmbedBuilder().setTitle('✅ הצבעתך נרשמה!').setDescription(`הצבעת לשרת **${serverData.name}**!\n\n⬆️ סה"כ הצבעות: **${serverData.votes}**`).setColor(0x57F287)], ephemeral: true });
 
@@ -893,7 +948,7 @@ async function handleSlVote(interaction, client) {
           { name: '📂 קטגוריה', value: `${cat.emoji} ${cat.name}`, inline: true },
         ).setColor(cat.color).setTimestamp()
       ]});
-    } catch {}
+    } catch (e) { console.error('Votes log error:', e); }
   }
 }
 
@@ -952,12 +1007,7 @@ async function handleSlEditModal(interaction, client) {
   existing.description = interaction.fields.getTextInputValue('sl_edit_desc');
   existing.link = interaction.fields.getTextInputValue('sl_edit_link');
   // עדכון הודעה
-  try {
-    const ch = await client.channels.fetch(existing.channelId);
-    const msg = await ch.messages.fetch(existing.messageId);
-    const cat = CONFIG.CATEGORIES[existing.category];
-    await msg.edit({ embeds: [buildServerEmbed(existing, cat, interaction.user)] });
-  } catch {}
+  await updateServerMessage(existing.channelId, client);
   await interaction.reply({ embeds: [new EmbedBuilder().setTitle('✅ השרת עודכן!').setDescription(`השרת **${existing.name}** עודכן בהצלחה!`).setColor(0x57F287)], ephemeral: true });
 }
 
@@ -1036,7 +1086,6 @@ async function handleServerListCommand(interaction, client) {
       .addFields(
         { name: '📂 קטגוריה', value: `${cat.emoji} ${cat.name}`, inline: true },
         { name: '👤 בעלים', value: `<@${serverData.ownerId}>`, inline: true },
-        { name: '🆔 ID בעלים מוצהר', value: serverData.ownerMentionId, inline: true },
         { name: '⬆️ הצבעות', value: `${serverData.votes}`, inline: true },
         { name: '📅 נוסף', value: `<t:${Math.floor(new Date(serverData.createdAt).getTime() / 1000)}:F>`, inline: true },
         { name: '🔗 קישור', value: serverData.link, inline: false },
@@ -1069,7 +1118,7 @@ async function updateServerMessage(channelId, client) {
         new ButtonBuilder().setCustomId(`sl_report_${channelId}`).setLabel('🚩 דווח').setStyle(ButtonStyle.Danger),
       )]
     });
-  } catch {}
+  } catch (e) { console.error('updateServerMessage error:', e); }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1107,7 +1156,8 @@ client.on('interactionCreate', async (interaction) => {
       if (cmd === 'giveaway')             return createGiveaway(interaction);
       if (cmd === 'endgiveaway')          return endGiveawayCommand(interaction);
       if (cmd === 'antilink')             return handleAntiLinkCommand(interaction);
-      if (cmd === 'posting')              return handlePosting(interaction);
+      if (cmd === 'posting')              return handlePosting(interaction, client);
+      if (cmd === 'set-posting-channel')  return handleSetPostingChannel(interaction);
       if (cmd === 'setup-serverlist')     return setupServerList(interaction);
       if (cmd === 'serverlist')           return handleServerListCommand(interaction, client);
       if (cmd === 'myserver')             return handleMyServerCommand(interaction, client);
