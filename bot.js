@@ -719,10 +719,10 @@ async function handleAntiLinkCommand(interaction) {
 
 // פאנל ראשי
 async function setupServerList(interaction) {
-  const bannerPath = path.join(__dirname, 'assets', 'serverlist-banner.png');
+  const bannerPath = path.join(__dirname, 'assets', '//');
   let bannerAttachment = null;
   try {
-    bannerAttachment = new AttachmentBuilder(bannerPath, { name: 'serverlist-banner.png' });
+    bannerAttachment = new AttachmentBuilder(bannerPath, { name: '//' });
   } catch (e) {
     console.error('Banner load error:', e);
   }
@@ -747,7 +747,7 @@ async function setupServerList(interaction) {
     .setColor(0x5865F2)
     .setThumbnail(interaction.guild.iconURL());
 
-  if (bannerAttachment) embed.setImage('attachment://serverlist-banner.png');
+  if (bannerAttachment) embed.setImage('attachment:////');
   embed.setFooter({ text: '🌐 VOrino Server List • לחץ על הכפתור למטה להוספת שרתך', iconURL: interaction.guild.iconURL() }).setTimestamp();
 
   const row = new ActionRowBuilder().addComponents(
