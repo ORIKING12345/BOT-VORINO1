@@ -757,7 +757,7 @@ async function setupServerList(interaction) {
   );
 
   const payload = { embeds: [embed], components: [row] };
-  if (bannerAttachment) payload.files = [bannerAttachment];
+  
 
   await interaction.channel.send(payload);
   await interaction.reply({ content: '✅ פאנל הסרבר ליסט נשלח!', ephemeral: true });
