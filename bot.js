@@ -30,31 +30,6 @@ const CONFIG = {
   VOTES_LOG_CHANNEL_ID: process.env.VOTES_LOG_CHANNEL_ID || '1506383446145110218',
   SERVER_OWNER_ROLE_ID: process.env.SERVER_OWNER_ROLE_ID || '1490779090733760795',
   BLACKLISTED_FROM_LIST: [],
-
-// פונקציה לרישום הפקודות אוטומטית בדיסקורד
-async function deployCommands(commandsArray) {
-    const token = process.env.BOT_TOKEN || CONFIG.TOKEN;
-    const clientId = process.env.CLIENT_ID || CONFIG.CLIENT_ID;
-    const guildId = process.env.GUILD_ID || CONFIG.GUILD_ID;
-
-    if (!token || !clientId || !guildId) {
-        console.error('Missing configuration for deploying commands.');
-        return;
-    }
-
-    const rest = new REST({ version: '10' }).setToken(token);
-    try {
-        console.log('Started refreshing application (/) commands.');
-        await rest.put(
-            Routes.applicationGuildCommands(clientId, guildId),
-            { body: commandsArray },
-        );
-        console.log('Successfully reloaded application (/) commands.');
-    } catch (error) {
-        console.error('Error deploying commands:', error);
-    }
-}
-
   
   // קטגוריות סרבר ליסט
   CATEGORIES: {
