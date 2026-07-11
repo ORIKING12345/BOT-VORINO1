@@ -1,4 +1,3 @@
-const path = require('path');
 const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -38,15 +37,6 @@ const DB = {
   tickets:      {},   // channelId -> { userId, category, name, createdAt, openedAt }
   ticketStats:  { total: 0, closed: 0 },
   giveaways:    {},   // messageId -> { prize, winners, entries, endTime, channelId, ended }
-  warnings:     {},   // userId -> [{ reason, moderator, timestamp }]
-  notes:        {},   // userId -> [{ text, moderator, timestamp }]
-  automod: {
-    enabled: true,
-    capsPercent: 70,
-    spamMessages: 5,
-    spamWindow: {},   // userId -> [timestamps]
-    badWords: [],
-  },
 };
 
 // ═══════════════════════════════════════════════════════
@@ -71,114 +61,6 @@ function recordAction(map, userId) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  ANTI-LINK
-// ═══════════════════════════════════════════════════════
-const ANTI_LINK = {
-  enabled: true,
-  allowedChannels: [],
-  exemptRoles: [ process.env.TEAM_ROLE_ID || '1489313397462798518' ],
-  patterns: [
-    /https?:\/\//i,
-    /discord\.gg\/[a-zA-Z0-9]+/i,
-    /discord\.com\/invite\/[a-zA-Z0-9]+/i,
-    /www\.[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}/i,
-    /[a-zA-Z0-9\-]+\.(com|net|org|io|gg|xyz|me|co|dev|app|ly|link|site|online|store|shop|info|biz|tv|cc|vc|tk|ml|ga|cf|gq)/i,
-  ],
-  warnings: {},
-  MAX_WARNINGS: 3,
-  WARN_RESET_MS: 60 * 60 * 1000,
-};
-
-function hasLink(content) {
-  if (!content) return false;
-  return ANTI_LINK.patterns.some(p => p.test(content));
-}
-function isExempt(member) {
-  if (!member) return false;
-  if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
-  if (member.permissions.has(PermissionFlagsBits.ManageMessages)) return true;
-  return ANTI_LINK.exemptRoles.some(roleId => member.roles.cache.has(roleId));
-}
-function addLinkWarning(userId) {
-  const now = Date.now();
-  if (!ANTI_LINK.warnings[userId]) ANTI_LINK.warnings[userId] = { count: 0, firstAt: now };
-  if (now - ANTI_LINK.warnings[userId].firstAt > ANTI_LINK.WARN_RESET_MS)
-    ANTI_LINK.warnings[userId] = { count: 0, firstAt: now };
-  ANTI_LINK.warnings[userId].count++;
-  return ANTI_LINK.warnings[userId].count;
-}
-async function handleAntiLink(message, client) {
-  if (!ANTI_LINK.enabled || !message.guild || message.author.bot) return;
-  if (ANTI_LINK.allowedChannels.includes(message.channelId)) return;
-  if (isExempt(message.member)) return;
-  if (!hasLink(message.content)) return;
-  try { await message.delete(); } catch {}
-  const warns = addLinkWarning(message.author.id);
-  if (warns >= ANTI_LINK.MAX_WARNINGS) {
-    try { await message.member.timeout(10 * 60 * 1000, '🛡️ אנטי-לינק'); } catch {}
-    ANTI_LINK.warnings[message.author.id] = { count: 0, firstAt: Date.now() };
-    try {
-      const w = await message.channel.send({ content: `<@${message.author.id}>`, embeds: [new EmbedBuilder().setTitle('🔇 קיבלת עצירה זמנית!').setDescription(`<@${message.author.id}> קיבלת **timeout של 10 דקות** בגלל שליחת לינקים חוזרת.`).setColor(0xED4245).setTimestamp()] });
-      setTimeout(() => w.delete().catch(() => {}), 8000);
-    } catch {}
-  } else {
-    try {
-      const w = await message.channel.send({ content: `<@${message.author.id}>`, embeds: [new EmbedBuilder().setTitle('🔗 שליחת לינקים אסורה!').setDescription(`<@${message.author.id}> הודעתך נמחקה.\n\n⚠️ **אזהרה ${warns}/${ANTI_LINK.MAX_WARNINGS}**`).setColor(0xFEE75C).setTimestamp()] });
-      setTimeout(() => w.delete().catch(() => {}), 6000);
-    } catch {}
-  }
-  await sendLog(client, new EmbedBuilder().setTitle('🔗 אנטי-לינק').addFields({ name: '👤 משתמש', value: `<@${message.author.id}>`, inline: true }, { name: '📍 ערוץ', value: `<#${message.channelId}>`, inline: true }, { name: '📝 תוכן', value: message.content.slice(0, 300) }).setColor(0xFEE75C).setTimestamp());
-}
-
-// ═══════════════════════════════════════════════════════
-//  AUTO-MOD (CAPS + SPAM + BAD WORDS) — small basic system
-// ═══════════════════════════════════════════════════════
-async function handleAutoMod(message, client) {
-  if (!DB.automod.enabled || !message.guild || message.author.bot) return;
-  if (isExempt(message.member)) return;
-
-  const content = message.content;
-
-  if (DB.automod.badWords.length > 0) {
-    const lower = content.toLowerCase();
-    const found = DB.automod.badWords.find(w => lower.includes(w.toLowerCase()));
-    if (found) {
-      try { await message.delete(); } catch {}
-      const w = await message.channel.send({ embeds: [new EmbedBuilder().setDescription(`<@${message.author.id}> הודעתך נמחקה — תוכן אסור.`).setColor(0xED4245)] }).catch(() => null);
-      if (w) setTimeout(() => w.delete().catch(() => {}), 5000);
-      await sendLog(client, new EmbedBuilder().setTitle('🤬 מילה אסורה').addFields({ name: '👤 משתמש', value: `<@${message.author.id}>`, inline: true }, { name: '📍 ערוץ', value: `<#${message.channelId}>`, inline: true }).setColor(0xED4245).setTimestamp());
-      return;
-    }
-  }
-
-  if (content.length > 8) {
-    const letters = content.replace(/[^a-zA-Zא-ת]/g, '');
-    if (letters.length > 6) {
-      const upper = content.replace(/[^A-Z]/g, '').length;
-      if ((upper / letters.length) * 100 >= DB.automod.capsPercent) {
-        try { await message.delete(); } catch {}
-        const w = await message.channel.send({ embeds: [new EmbedBuilder().setDescription(`<@${message.author.id}> אנא אל תכתוב בכיפסלוק! ⚠️`).setColor(0xFEE75C)] }).catch(() => null);
-        if (w) setTimeout(() => w.delete().catch(() => {}), 5000);
-        return;
-      }
-    }
-  }
-
-  const now = Date.now();
-  const SPAM_WINDOW = 5000;
-  if (!DB.automod.spamWindow[message.author.id]) DB.automod.spamWindow[message.author.id] = [];
-  DB.automod.spamWindow[message.author.id] = DB.automod.spamWindow[message.author.id].filter(t => now - t < SPAM_WINDOW);
-  DB.automod.spamWindow[message.author.id].push(now);
-  if (DB.automod.spamWindow[message.author.id].length >= DB.automod.spamMessages) {
-    DB.automod.spamWindow[message.author.id] = [];
-    try { await message.member.timeout(5 * 60 * 1000, '🛡️ ספאם'); } catch {}
-    const w = await message.channel.send({ embeds: [new EmbedBuilder().setTitle('🚫 ספאם זוהה!').setDescription(`<@${message.author.id}> קיבלת timeout של 5 דקות בגלל ספאם.`).setColor(0xED4245)] }).catch(() => null);
-    if (w) setTimeout(() => w.delete().catch(() => {}), 8000);
-    await sendLog(client, new EmbedBuilder().setTitle('🚫 אוטומוד — ספאם').addFields({ name: '👤 משתמש', value: `<@${message.author.id}>`, inline: true }, { name: '📍 ערוץ', value: `<#${message.channelId}>`, inline: true }).setColor(0xED4245).setTimestamp());
-  }
-}
-
-// ═══════════════════════════════════════════════════════
 //  HELPERS
 // ═══════════════════════════════════════════════════════
 function isTeam(member) {
@@ -187,6 +69,24 @@ function isTeam(member) {
 function timestamp() { return `<t:${Math.floor(Date.now() / 1000)}:F>`; }
 async function sendLog(client, embed) {
   try { const ch = await client.channels.fetch(CONFIG.LOG_CHANNEL_ID); if (ch) ch.send({ embeds: [embed] }); } catch {}
+}
+function denyEmbed(text) {
+  return { embeds: [new EmbedBuilder().setDescription(`❌ ${text}`).setColor(0xED4245)], ephemeral: true };
+}
+// היררכיה: האם ה-executor מותר לו לפעול על ה-target, והאם הבוט מסוגל
+function canModerate(interaction, targetMember, action) {
+  if (!targetMember) return { ok: false, reason: 'המשתמש לא נמצא בשרת.' };
+  if (targetMember.id === interaction.user.id) return { ok: false, reason: 'אי אפשר לבצע פעולה זו על עצמך.' };
+  if (targetMember.id === interaction.client.user.id) return { ok: false, reason: 'אי אפשר לבצע פעולה זו על הבוט.' };
+  const guild = interaction.guild;
+  const isOwner = interaction.user.id === guild.ownerId;
+  if (!isOwner && targetMember.roles.highest.position >= interaction.member.roles.highest.position) {
+    return { ok: false, reason: 'אין לך הרשאה לבצע פעולה על משתמש עם רול שווה/גבוה משלך.' };
+  }
+  if (action === 'kick'    && !targetMember.kickable)    return { ok: false, reason: 'לבוט אין הרשאה לקיק את המשתמש (הרול שלו גבוה מדי).' };
+  if (action === 'ban'     && !targetMember.bannable)    return { ok: false, reason: 'לבוט אין הרשאה לבאן את המשתמש (הרול שלו גבוה מדי).' };
+  if (action === 'timeout' && !targetMember.moderatable) return { ok: false, reason: 'לבוט אין הרשאה לתת טיימאוט למשתמש (הרול שלו גבוה מדי).' };
+  return { ok: true };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -197,12 +97,6 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('setup-tickets').setDescription('📩 שלח את פאנל הטיקטים [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   // ── אימות ──
   new SlashCommandBuilder().setName('setup-verify').setDescription('✅ שלח את פאנל האימות [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-  // ── שידור ──
-  new SlashCommandBuilder().setName('broadcast').setDescription('📢 שלח הודעה מהבוט [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addChannelOption(o => o.setName('channel').setDescription('הערוץ').setRequired(true))
-    .addStringOption(o => o.setName('message').setDescription('ההודעה').setRequired(true))
-    .addStringOption(o => o.setName('title').setDescription('כותרת (אופציונלי)'))
-    .addStringOption(o => o.setName('color').setDescription('צבע hex')),
   // ── הגרלה ──
   new SlashCommandBuilder().setName('giveaway').setDescription('🎉 צור הגרלה [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(o => o.setName('prize').setDescription('הפרס').setRequired(true))
@@ -212,33 +106,11 @@ const COMMANDS = [
     .addStringOption(o => o.setName('messageid').setDescription('ID הודעה').setRequired(true)),
   new SlashCommandBuilder().setName('reroll').setDescription('🔄 בחר זוכה חדש להגרלה שהסתיימה [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(o => o.setName('messageid').setDescription('ID הודעה').setRequired(true)),
-  // ── אנטי-לינק ──
-  new SlashCommandBuilder().setName('antilink').setDescription('🔗 ניהול אנטי-לינק [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addSubcommand(s => s.setName('toggle').setDescription('הפעל/כבה').addBooleanOption(o => o.setName('enabled').setDescription('מצב').setRequired(true)))
-    .addSubcommand(s => s.setName('allow-channel').setDescription('ערוץ מותר').addChannelOption(o => o.setName('channel').setDescription('ערוץ').setRequired(true)))
-    .addSubcommand(s => s.setName('remove-channel').setDescription('הסר ערוץ').addChannelOption(o => o.setName('channel').setDescription('ערוץ').setRequired(true)))
-    .addSubcommand(s => s.setName('status').setDescription('סטטוס'))
-    .addSubcommand(s => s.setName('clearwarnings').setDescription('אפס אזהרות').addUserOption(o => o.setName('user').setDescription('משתמש').setRequired(true))),
-  // ── לוגים ──
+  // ── תשתית ──
   new SlashCommandBuilder().setName('set-log-channel').setDescription('📜 הגדר ערוץ לוגים [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addChannelOption(o => o.setName('channel').setDescription('הערוץ').setRequired(true)),
-  new SlashCommandBuilder().setName('set-boost-channel').setDescription('💎 הגדר ערוץ הודעות בוסט [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addChannelOption(o => o.setName('channel').setDescription('ערוץ').setRequired(true)),
 
-  // ── מודרציה בסיסית ──
-  new SlashCommandBuilder().setName('warn').setDescription('⚠️ אזהרה למשתמש [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
-    .addUserOption(o => o.setName('user').setDescription('משתמש').setRequired(true))
-    .addStringOption(o => o.setName('reason').setDescription('סיבה').setRequired(true)),
-  new SlashCommandBuilder().setName('warnings').setDescription('📋 הצג אזהרות של משתמש [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
-    .addUserOption(o => o.setName('user').setDescription('משתמש').setRequired(true)),
-  new SlashCommandBuilder().setName('clearwarns').setDescription('🗑️ נקה אזהרות [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
-    .addUserOption(o => o.setName('user').setDescription('משתמש').setRequired(true))
-    .addIntegerOption(o => o.setName('index').setDescription('מספר אזהרה ספציפית (ריק = כולן)')),
-  new SlashCommandBuilder().setName('note').setDescription('📓 הוסף הערת מוד למשתמש [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
-    .addUserOption(o => o.setName('user').setDescription('משתמש').setRequired(true))
-    .addStringOption(o => o.setName('text').setDescription('הערה').setRequired(true)),
-  new SlashCommandBuilder().setName('notes').setDescription('📓 הצג הערות על משתמש [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
-    .addUserOption(o => o.setName('user').setDescription('משתמש').setRequired(true)),
+  // ── מודרציה ──
   new SlashCommandBuilder().setName('kick').setDescription('👢 קיק [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.KickMembers)
     .addUserOption(o => o.setName('user').setDescription('משתמש').setRequired(true))
     .addStringOption(o => o.setName('reason').setDescription('סיבה')),
@@ -257,26 +129,10 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('purge').setDescription('🗑️ מחק הודעות [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
     .addIntegerOption(o => o.setName('amount').setDescription('כמות (1-100)').setRequired(true).setMinValue(1).setMaxValue(100))
     .addUserOption(o => o.setName('user').setDescription('מחק רק של משתמש מסוים')),
-  new SlashCommandBuilder().setName('slowmode').setDescription('🐢 הגדר סלומוד [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+  new SlashCommandBuilder().setName('slowmode').setDescription('🐢 הגדר סלואומוד [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
     .addIntegerOption(o => o.setName('seconds').setDescription('שניות (0 = כיבוי)').setRequired(true).setMinValue(0).setMaxValue(21600)),
   new SlashCommandBuilder().setName('lock').setDescription('🔒 נעל ערוץ [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
   new SlashCommandBuilder().setName('unlock').setDescription('🔓 פתח ערוץ [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
-  new SlashCommandBuilder().setName('automod').setDescription('🤖 ניהול אוטומוד [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addSubcommand(s => s.setName('toggle').setDescription('הפעל/כבה').addBooleanOption(o => o.setName('enabled').setDescription('מצב').setRequired(true)))
-    .addSubcommand(s => s.setName('addword').setDescription('הוסף מילה אסורה').addStringOption(o => o.setName('word').setDescription('מילה').setRequired(true)))
-    .addSubcommand(s => s.setName('removeword').setDescription('הסר מילה אסורה').addStringOption(o => o.setName('word').setDescription('מילה').setRequired(true)))
-    .addSubcommand(s => s.setName('status').setDescription('סטטוס אוטומוד')),
-
-  // ── כלים בסיסיים ──
-  new SlashCommandBuilder().setName('userinfo').setDescription('👤 מידע על משתמש').addUserOption(o => o.setName('user').setDescription('משתמש (ריק = אתה)')),
-  new SlashCommandBuilder().setName('serverinfo').setDescription('🏠 מידע על השרת'),
-  new SlashCommandBuilder().setName('avatar').setDescription('🖼️ הצג תמונת פרופיל').addUserOption(o => o.setName('user').setDescription('משתמש')),
-  new SlashCommandBuilder().setName('ping').setDescription('🏓 פינג של הבוט'),
-  new SlashCommandBuilder().setName('math').setDescription('🔢 חשב ביטוי מתמטי').addStringOption(o => o.setName('expression').setDescription('ביטוי').setRequired(true)),
-  new SlashCommandBuilder().setName('coinflip').setDescription('🪙 הטל מטבע'),
-  new SlashCommandBuilder().setName('dice').setDescription('🎲 הטל קוביה').addIntegerOption(o => o.setName('sides').setDescription('צלעות (ברירת מחדל 6)')),
-  new SlashCommandBuilder().setName('8ball').setDescription('🎱 שאל את הכדור').addStringOption(o => o.setName('question').setDescription('שאלה').setRequired(true)),
-  new SlashCommandBuilder().setName('embed').setDescription('📝 שלח embed מותאם אישית [צוות]').setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
 ];
 
 // ═══════════════════════════════════════════════════════
@@ -335,6 +191,7 @@ async function handleTicketCategory(interaction, client) {
     return interaction.followUp({ content: '❌ שגיאה ביצירת הטיקט.', ephemeral: true });
   }
   DB.tickets[ticketChannel.id] = { userId: user.id, category, name: channelName, createdAt: new Date().toISOString(), openedAt: Date.now() };
+
   const teamRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('ticket_close').setLabel('🔒 סגור').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId('ticket_transcript').setLabel('📄 טרנסקריפט').setStyle(ButtonStyle.Secondary),
@@ -346,6 +203,7 @@ async function handleTicketCategory(interaction, client) {
     embeds: [new EmbedBuilder().setTitle(`🎫 טיקט — ${categoryNames[category]}`).setDescription(`פתוח על ידי <@${user.id}>\n📅 ${timestamp()}\n\nשלום <@${user.id}>! הצוות יגיע אליך בקרוב.`).setColor(0x57F287).setThumbnail(user.displayAvatarURL()).setFooter({ text: `ID: ${ticketChannel.id}` })],
     components: [teamRow]
   });
+
   await interaction.followUp({ embeds: [new EmbedBuilder().setDescription(`✅ הטיקט שלך נפתח! <#${ticketChannel.id}>`).setColor(0x57F287)], ephemeral: true });
   await sendLog(client, new EmbedBuilder().setTitle('🎫 טיקט נפתח').addFields({ name: 'משתמש', value: `<@${user.id}>`, inline: true }, { name: 'קטגוריה', value: categoryNames[category], inline: true }, { name: 'ערוץ', value: `<#${ticketChannel.id}>`, inline: true }).setColor(0x5865F2).setTimestamp());
 }
@@ -353,7 +211,7 @@ async function handleTicketAction(interaction, client) {
   const action = interaction.customId;
   const channel = interaction.channel;
   const ticket = DB.tickets[channel.id];
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  if (!isTeam(interaction.member)) return interaction.reply(denyEmbed('רק צוות.'));
   if (action === 'ticket_close') {
     DB.ticketStats.closed++;
     await interaction.reply({ embeds: [new EmbedBuilder().setDescription('🔒 הטיקט נסגר תוך 5 שניות...').setColor(0xED4245)] });
@@ -420,7 +278,7 @@ async function handleVerifyAnswer(interaction, client) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 3 — WELCOME + BOOST (small basic)
+//  SYSTEM 3 — WELCOME + BOOST
 // ═══════════════════════════════════════════════════════
 async function handleWelcome(member, client) {
   try {
@@ -476,22 +334,7 @@ async function handleBoost(oldMember, newMember, client) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 4 — BROADCAST
-// ═══════════════════════════════════════════════════════
-async function broadcast(interaction) {
-  const channel = interaction.options.getChannel('channel');
-  const message = interaction.options.getString('message');
-  const title = interaction.options.getString('title');
-  const colorStr = interaction.options.getString('color') || '#5865F2';
-  const color = parseInt(colorStr.replace('#', ''), 16) || 0x5865F2;
-  const embed = new EmbedBuilder().setDescription(message).setColor(color).setFooter({ iconURL: interaction.guild.iconURL() }).setTimestamp();
-  if (title) embed.setTitle(title);
-  await channel.send({ embeds: [embed] });
-  await interaction.reply({ content: `✅ ההודעה נשלחה ל<#${channel.id}>`, ephemeral: true });
-}
-
-// ═══════════════════════════════════════════════════════
-//  SYSTEM 5 — LOGS
+//  SYSTEM 4 — LOGS
 // ═══════════════════════════════════════════════════════
 async function logMemberAdd(member, client) {
   await sendLog(client, new EmbedBuilder().setTitle('📥 חבר הצטרף').setDescription(`<@${member.id}> הצטרף לשרת.`).addFields({ name: '👤 שם', value: member.user.tag, inline: true }, { name: '🆔 ID', value: member.id, inline: true }, { name: '📅 נוצר ב', value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`, inline: true }).setThumbnail(member.user.displayAvatarURL()).setColor(0x57F287).setTimestamp());
@@ -521,7 +364,7 @@ async function logMessageEdit(oldMsg, newMsg, client) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 6 — ANTI-NUKE PROTECTION
+//  SYSTEM 5 — ANTI-NUKE PROTECTION
 // ═══════════════════════════════════════════════════════
 async function handleGuildMemberAdd(member, client) {
   if (!member.user.bot) return;
@@ -640,132 +483,73 @@ async function handleProtectedMemberRemove(member, client) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 7 — ANTI-LINK COMMANDS
+//  SYSTEM 6 — MODERATION (kick/ban/timeout — improved)
 // ═══════════════════════════════════════════════════════
-async function handleAntiLinkCommand(interaction) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
-  const sub = interaction.options.getSubcommand();
-  if (sub === 'toggle') {
-    ANTI_LINK.enabled = interaction.options.getBoolean('enabled');
-    await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🔗 אנטי-לינק').setDescription(`המערכת כעת: **${ANTI_LINK.enabled ? '✅ פעילה' : '❌ כבויה'}**`).setColor(ANTI_LINK.enabled ? 0x57F287 : 0xED4245).setTimestamp()], ephemeral: true });
-  } else if (sub === 'allow-channel') {
-    const ch = interaction.options.getChannel('channel');
-    if (!ANTI_LINK.allowedChannels.includes(ch.id)) ANTI_LINK.allowedChannels.push(ch.id);
-    await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ <#${ch.id}> נוסף לפטורים.`).setColor(0x57F287)], ephemeral: true });
-  } else if (sub === 'remove-channel') {
-    const ch = interaction.options.getChannel('channel');
-    ANTI_LINK.allowedChannels = ANTI_LINK.allowedChannels.filter(id => id !== ch.id);
-    await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ <#${ch.id}> הוסר.`).setColor(0x57F287)], ephemeral: true });
-  } else if (sub === 'status') {
-    const allowedList = ANTI_LINK.allowedChannels.length > 0 ? ANTI_LINK.allowedChannels.map(id => `<#${id}>`).join('\n') : 'אין';
-    await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🔗 סטטוס אנטי-לינק').addFields({ name: '⚡ מצב', value: ANTI_LINK.enabled ? '✅ פעיל' : '❌ כבוי', inline: true }, { name: '⚠️ מקסימום אזהרות', value: `${ANTI_LINK.MAX_WARNINGS}`, inline: true }, { name: '📢 ערוצים פטורים', value: allowedList }).setColor(0x5865F2).setTimestamp()], ephemeral: true });
-  } else if (sub === 'clearwarnings') {
-    const user = interaction.options.getUser('user');
-    delete ANTI_LINK.warnings[user.id];
-    await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ אזהרות של <@${user.id}> אופסו.`).setColor(0x57F287)], ephemeral: true });
-  }
-}
-
-// ═══════════════════════════════════════════════════════
-//  SYSTEM 8 — BASIC MODERATION
-// ═══════════════════════════════════════════════════════
-async function handleWarn(interaction, client) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
-  const user = interaction.options.getUser('user');
-  const reason = interaction.options.getString('reason');
-  if (!DB.warnings[user.id]) DB.warnings[user.id] = [];
-  DB.warnings[user.id].push({ reason, moderator: interaction.user.id, timestamp: new Date().toISOString() });
-  const count = DB.warnings[user.id].length;
-  await interaction.reply({ embeds: [new EmbedBuilder().setTitle('⚠️ אזהרה ניתנה').addFields({ name: '👤 משתמש', value: `<@${user.id}>`, inline: true }, { name: '👮 מנחה', value: `<@${interaction.user.id}>`, inline: true }, { name: '📝 סיבה', value: reason, inline: false }, { name: '⚠️ סה"כ אזהרות', value: `${count}`, inline: true }).setColor(0xFEE75C).setTimestamp()] });
-  try {
-    await user.send({ embeds: [new EmbedBuilder().setTitle('⚠️ קיבלת אזהרה!').setDescription(`קיבלת אזהרה בשרת **${interaction.guild.name}**.\n\n📝 **סיבה:** ${reason}\n⚠️ **אזהרה מספר:** ${count}`).setColor(0xFEE75C).setTimestamp()] });
-  } catch {}
-  await sendLog(client, new EmbedBuilder().setTitle('⚠️ אזהרה').addFields({ name: '👤 משתמש', value: `<@${user.id}>`, inline: true }, { name: '👮 מנחה', value: `<@${interaction.user.id}>`, inline: true }, { name: '📝 סיבה', value: reason }, { name: '🔢 אזהרה #', value: `${count}`, inline: true }).setColor(0xFEE75C).setTimestamp());
-}
-async function handleWarnings(interaction) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
-  const user = interaction.options.getUser('user');
-  const warns = DB.warnings[user.id] || [];
-  if (warns.length === 0) return interaction.reply({ embeds: [new EmbedBuilder().setDescription(`<@${user.id}> אין לו אזהרות.`).setColor(0x57F287)], ephemeral: true });
-  const desc = warns.map((w, i) => `**${i + 1}.** 📝 ${w.reason}\n👮 <@${w.moderator}> | 📅 <t:${Math.floor(new Date(w.timestamp).getTime() / 1000)}:R>`).join('\n\n');
-  await interaction.reply({ embeds: [new EmbedBuilder().setTitle(`⚠️ אזהרות — ${user.tag}`).setDescription(desc).setColor(0xFEE75C).setThumbnail(user.displayAvatarURL()).setFooter({ text: `${warns.length} אזהרות בסה"כ` }).setTimestamp()], ephemeral: true });
-}
-async function handleClearWarns(interaction) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
-  const user = interaction.options.getUser('user');
-  const index = interaction.options.getInteger('index');
-  if (index !== null) {
-    if (!DB.warnings[user.id] || !DB.warnings[user.id][index - 1]) return interaction.reply({ content: '❌ אזהרה לא נמצאה.', ephemeral: true });
-    DB.warnings[user.id].splice(index - 1, 1);
-    await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ אזהרה #${index} של <@${user.id}> נמחקה.`).setColor(0x57F287)], ephemeral: true });
-  } else {
-    DB.warnings[user.id] = [];
-    await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ כל אזהרות <@${user.id}> נמחקו.`).setColor(0x57F287)], ephemeral: true });
-  }
-}
-async function handleNote(interaction) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
-  const user = interaction.options.getUser('user');
-  const text = interaction.options.getString('text');
-  if (!DB.notes[user.id]) DB.notes[user.id] = [];
-  DB.notes[user.id].push({ text, moderator: interaction.user.id, timestamp: new Date().toISOString() });
-  await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ הערה נוספה ל<@${user.id}>: ${text}`).setColor(0x57F287)], ephemeral: true });
-}
-async function handleNotes(interaction) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
-  const user = interaction.options.getUser('user');
-  const notes = DB.notes[user.id] || [];
-  if (notes.length === 0) return interaction.reply({ embeds: [new EmbedBuilder().setDescription(`אין הערות על <@${user.id}>.`).setColor(0x57F287)], ephemeral: true });
-  const desc = notes.map((n, i) => `**${i + 1}.** 📓 ${n.text}\n👮 <@${n.moderator}> | <t:${Math.floor(new Date(n.timestamp).getTime() / 1000)}:R>`).join('\n\n');
-  await interaction.reply({ embeds: [new EmbedBuilder().setTitle(`📓 הערות — ${user.tag}`).setDescription(desc).setColor(0x3498DB).setThumbnail(user.displayAvatarURL()).setTimestamp()], ephemeral: true });
-}
 async function handleKick(interaction, client) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  if (!isTeam(interaction.member)) return interaction.reply(denyEmbed('רק צוות.'));
   const user = interaction.options.getUser('user');
   const reason = interaction.options.getString('reason') || 'לא צוינה';
   const member = interaction.guild.members.cache.get(user.id);
-  if (!member) return interaction.reply({ content: '❌ משתמש לא נמצא.', ephemeral: true });
-  try { await member.kick(reason); } catch { return interaction.reply({ content: '❌ לא ניתן לקיק משתמש זה.', ephemeral: true }); }
-  await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`👢 <@${user.id}> קיק מהשרת.\n📝 **סיבה:** ${reason}`).setColor(0xED4245)] });
-  await sendLog(client, new EmbedBuilder().setTitle('👢 קיק').addFields({ name: '👤 משתמש', value: `${user.tag}`, inline: true }, { name: '👮 מנחה', value: `<@${interaction.user.id}>`, inline: true }, { name: '📝 סיבה', value: reason }).setColor(0xED4245).setTimestamp());
+  const check = canModerate(interaction, member, 'kick');
+  if (!check.ok) return interaction.reply(denyEmbed(check.reason));
+
+  try { await user.send({ embeds: [new EmbedBuilder().setTitle('👢 קיבלת קיק').setDescription(`קיבלת קיק מהשרת **${interaction.guild.name}**.\n📝 **סיבה:** ${reason}`).setColor(0xED4245).setTimestamp()] }); } catch {}
+  try { await member.kick(reason); } catch { return interaction.reply(denyEmbed('שגיאה בביצוע הקיק.')); }
+
+  await interaction.reply({ embeds: [new EmbedBuilder().setTitle('👢 קיק בוצע').setDescription(`<@${user.id}> קיבל קיק מהשרת.`).addFields({ name: '👮 מנחה', value: `<@${interaction.user.id}>`, inline: true }, { name: '📝 סיבה', value: reason, inline: true }).setThumbnail(user.displayAvatarURL()).setColor(0xED4245).setTimestamp()] });
+  await sendLog(client, new EmbedBuilder().setTitle('👢 קיק').addFields({ name: '👤 משתמש', value: `${user.tag} (${user.id})`, inline: true }, { name: '👮 מנחה', value: `<@${interaction.user.id}>`, inline: true }, { name: '📝 סיבה', value: reason }).setColor(0xED4245).setTimestamp());
 }
 async function handleBan(interaction, client) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  if (!isTeam(interaction.member)) return interaction.reply(denyEmbed('רק צוות.'));
   const user = interaction.options.getUser('user');
   const reason = interaction.options.getString('reason') || 'לא צוינה';
   const days = interaction.options.getInteger('days') || 0;
-  try { await interaction.guild.bans.create(user.id, { reason, deleteMessageDays: days }); } catch { return interaction.reply({ content: '❌ לא ניתן לבאן משתמש זה.', ephemeral: true }); }
-  await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`🔨 <@${user.id}> בוין מהשרת.\n📝 **סיבה:** ${reason}`).setColor(0xED4245)] });
-  await sendLog(client, new EmbedBuilder().setTitle('🔨 באן').addFields({ name: '👤 משתמש', value: `${user.tag}`, inline: true }, { name: '👮 מנחה', value: `<@${interaction.user.id}>`, inline: true }, { name: '📝 סיבה', value: reason }).setColor(0xED4245).setTimestamp());
+  const member = interaction.guild.members.cache.get(user.id);
+  if (member) {
+    const check = canModerate(interaction, member, 'ban');
+    if (!check.ok) return interaction.reply(denyEmbed(check.reason));
+  }
+
+  try { await user.send({ embeds: [new EmbedBuilder().setTitle('🔨 קיבלת באן').setDescription(`קיבלת באן מהשרת **${interaction.guild.name}**.\n📝 **סיבה:** ${reason}`).setColor(0xED4245).setTimestamp()] }); } catch {}
+  try { await interaction.guild.bans.create(user.id, { reason, deleteMessageDays: days }); } catch { return interaction.reply(denyEmbed('לא ניתן לבאן משתמש זה.')); }
+
+  await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🔨 באן בוצע').setDescription(`<@${user.id}> בוין מהשרת.`).addFields({ name: '👮 מנחה', value: `<@${interaction.user.id}>`, inline: true }, { name: '📝 סיבה', value: reason, inline: true }).setThumbnail(user.displayAvatarURL()).setColor(0xED4245).setTimestamp()] });
+  await sendLog(client, new EmbedBuilder().setTitle('🔨 באן').addFields({ name: '👤 משתמש', value: `${user.tag} (${user.id})`, inline: true }, { name: '👮 מנחה', value: `<@${interaction.user.id}>`, inline: true }, { name: '📝 סיבה', value: reason }).setColor(0xED4245).setTimestamp());
 }
 async function handleUnban(interaction, client) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  if (!isTeam(interaction.member)) return interaction.reply(denyEmbed('רק צוות.'));
   const userId = interaction.options.getString('userid');
-  try { await interaction.guild.bans.remove(userId); } catch { return interaction.reply({ content: '❌ משתמש לא בוין.', ephemeral: true }); }
+  try { await interaction.guild.bans.remove(userId); } catch { return interaction.reply(denyEmbed('משתמש לא בוין, או ID לא תקין.')); }
   await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`🔓 <@${userId}> הוסר מהבאן.`).setColor(0x57F287)] });
   await sendLog(client, new EmbedBuilder().setTitle('🔓 באן הוסר').addFields({ name: '👤 משתמש', value: `<@${userId}>`, inline: true }, { name: '👮 מנחה', value: `<@${interaction.user.id}>`, inline: true }).setColor(0x57F287).setTimestamp());
 }
 async function handleTimeout(interaction, client) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  if (!isTeam(interaction.member)) return interaction.reply(denyEmbed('רק צוות.'));
   const user = interaction.options.getUser('user');
   const minutes = interaction.options.getInteger('minutes');
   const reason = interaction.options.getString('reason') || 'לא צוינה';
   const member = interaction.guild.members.cache.get(user.id);
-  if (!member) return interaction.reply({ content: '❌ משתמש לא נמצא.', ephemeral: true });
-  try { await member.timeout(minutes * 60 * 1000, reason); } catch { return interaction.reply({ content: '❌ לא ניתן.', ephemeral: true }); }
-  await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`⏳ <@${user.id}> קיבל timeout של **${minutes} דקות**.\n📝 סיבה: ${reason}`).setColor(0xFEE75C)] });
+  const check = canModerate(interaction, member, 'timeout');
+  if (!check.ok) return interaction.reply(denyEmbed(check.reason));
+  if (minutes < 1 || minutes > 40320) return interaction.reply(denyEmbed('משך הטיימאוט חייב להיות בין דקה ל-28 יום.'));
+
+  try { await member.timeout(minutes * 60 * 1000, reason); } catch { return interaction.reply(denyEmbed('שגיאה במתן טיימאוט.')); }
+  try { await user.send({ embeds: [new EmbedBuilder().setTitle('⏳ קיבלת טיימאוט').setDescription(`קיבלת טיימאוט בשרת **${interaction.guild.name}** למשך ${minutes} דקות.\n📝 **סיבה:** ${reason}`).setColor(0xFEE75C).setTimestamp()] }); } catch {}
+
+  await interaction.reply({ embeds: [new EmbedBuilder().setTitle('⏳ Timeout בוצע').setDescription(`<@${user.id}> קיבל timeout של **${minutes} דקות**.`).addFields({ name: '👮 מנחה', value: `<@${interaction.user.id}>`, inline: true }, { name: '📝 סיבה', value: reason, inline: true }).setColor(0xFEE75C).setTimestamp()] });
   await sendLog(client, new EmbedBuilder().setTitle('⏳ Timeout').addFields({ name: '👤 משתמש', value: `<@${user.id}>`, inline: true }, { name: '⏰ זמן', value: `${minutes} דקות`, inline: true }, { name: '📝 סיבה', value: reason }).setColor(0xFEE75C).setTimestamp());
 }
-async function handleUntimeout(interaction) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+async function handleUntimeout(interaction, client) {
+  if (!isTeam(interaction.member)) return interaction.reply(denyEmbed('רק צוות.'));
   const user = interaction.options.getUser('user');
   const member = interaction.guild.members.cache.get(user.id);
-  if (!member) return interaction.reply({ content: '❌ משתמש לא נמצא.', ephemeral: true });
-  try { await member.timeout(null); } catch { return interaction.reply({ content: '❌ לא ניתן.', ephemeral: true }); }
+  if (!member) return interaction.reply(denyEmbed('משתמש לא נמצא.'));
+  try { await member.timeout(null); } catch { return interaction.reply(denyEmbed('לא ניתן.')); }
   await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ Timeout של <@${user.id}> הוסר.`).setColor(0x57F287)] });
+  await sendLog(client, new EmbedBuilder().setTitle('✅ Timeout הוסר').addFields({ name: '👤 משתמש', value: `<@${user.id}>`, inline: true }, { name: '👮 מנחה', value: `<@${interaction.user.id}>`, inline: true }).setColor(0x57F287).setTimestamp());
 }
 async function handlePurge(interaction, client) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  if (!isTeam(interaction.member)) return interaction.reply(denyEmbed('רק צוות.'));
   const amount = interaction.options.getInteger('amount');
   const user = interaction.options.getUser('user');
   await interaction.deferReply({ ephemeral: true });
@@ -778,47 +562,24 @@ async function handlePurge(interaction, client) {
   } catch { await interaction.followUp({ content: '❌ שגיאה — הודעות ישנות מ-14 יום לא ניתן למחוק.', ephemeral: true }); }
 }
 async function handleSlowmode(interaction) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  if (!isTeam(interaction.member)) return interaction.reply(denyEmbed('רק צוות.'));
   const seconds = interaction.options.getInteger('seconds');
   await interaction.channel.setRateLimitPerUser(seconds);
-  await interaction.reply({ embeds: [new EmbedBuilder().setDescription(seconds === 0 ? '✅ סלומוד כובה.' : `✅ סלומוד הוגדר ל-**${seconds} שניות**.`).setColor(0x57F287)] });
+  await interaction.reply({ embeds: [new EmbedBuilder().setDescription(seconds === 0 ? '✅ סלואומוד כובה.' : `✅ סלואומוד הוגדר ל-**${seconds} שניות**.`).setColor(0x57F287)] });
 }
 async function handleLock(interaction) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  if (!isTeam(interaction.member)) return interaction.reply(denyEmbed('רק צוות.'));
   await interaction.channel.permissionOverwrites.edit(interaction.guild.id, { SendMessages: false });
   await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🔒 ערוץ ננעל').setDescription(`<#${interaction.channelId}> ננעל.`).setColor(0xED4245)] });
 }
 async function handleUnlock(interaction) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+  if (!isTeam(interaction.member)) return interaction.reply(denyEmbed('רק צוות.'));
   await interaction.channel.permissionOverwrites.edit(interaction.guild.id, { SendMessages: null });
   await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🔓 ערוץ נפתח').setDescription(`<#${interaction.channelId}> נפתח.`).setColor(0x57F287)] });
 }
-async function handleAutoModCommand(interaction) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
-  const sub = interaction.options.getSubcommand();
-  if (sub === 'toggle') {
-    DB.automod.enabled = interaction.options.getBoolean('enabled');
-    await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`🤖 אוטומוד כעת: **${DB.automod.enabled ? '✅ פעיל' : '❌ כבוי'}**`).setColor(DB.automod.enabled ? 0x57F287 : 0xED4245)], ephemeral: true });
-  } else if (sub === 'addword') {
-    const word = interaction.options.getString('word').toLowerCase();
-    if (!DB.automod.badWords.includes(word)) DB.automod.badWords.push(word);
-    await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ המילה \`${word}\` נוספה לרשימת המילים האסורות.`).setColor(0x57F287)], ephemeral: true });
-  } else if (sub === 'removeword') {
-    const word = interaction.options.getString('word').toLowerCase();
-    DB.automod.badWords = DB.automod.badWords.filter(w => w !== word);
-    await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ המילה \`${word}\` הוסרה.`).setColor(0x57F287)], ephemeral: true });
-  } else if (sub === 'status') {
-    await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🤖 סטטוס אוטומוד').addFields(
-      { name: '⚡ מצב', value: DB.automod.enabled ? '✅ פעיל' : '❌ כבוי', inline: true },
-      { name: '🔠 גבול כיפסלוק', value: `${DB.automod.capsPercent}%`, inline: true },
-      { name: '🔢 גבול ספאם', value: `${DB.automod.spamMessages} הודעות/5 שניות`, inline: true },
-      { name: '🚫 מילים אסורות', value: DB.automod.badWords.length > 0 ? DB.automod.badWords.map(w => `\`${w}\``).join(', ') : 'אין', inline: false },
-    ).setColor(0x5865F2).setTimestamp()], ephemeral: true });
-  }
-}
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 9 — GIVEAWAYS
+//  SYSTEM 7 — GIVEAWAYS
 // ═══════════════════════════════════════════════════════
 async function createGiveaway(interaction) {
   const prize = interaction.options.getString('prize');
@@ -874,109 +635,6 @@ async function rerollGiveaway(interaction) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM 10 — BASIC UTILITY / TOOLS
-// ═══════════════════════════════════════════════════════
-async function handleUserInfo(interaction) {
-  const user = interaction.options.getUser('user') || interaction.user;
-  const member = interaction.guild.members.cache.get(user.id);
-  const warns = (DB.warnings[user.id] || []).length;
-  const notes = (DB.notes[user.id] || []).length;
-  const embed = new EmbedBuilder()
-    .setTitle(`👤 ${user.tag}`)
-    .setThumbnail(user.displayAvatarURL({ dynamic: true, size: 256 }))
-    .addFields(
-      { name: '🆔 ID', value: user.id, inline: true },
-      { name: '📅 נוצר ב', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true },
-      { name: '📥 הצטרף ב', value: member ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>` : 'לא ידוע', inline: true },
-      { name: '⚠️ אזהרות', value: `${warns}`, inline: true },
-      { name: '📓 הערות', value: `${notes}`, inline: true },
-    )
-    .setColor(0x5865F2)
-    .setTimestamp();
-  if (member) {
-    const roles = member.roles.cache.filter(r => r.id !== interaction.guild.id).map(r => `<@&${r.id}>`).slice(0, 10).join(', ') || 'אין';
-    embed.addFields({ name: '🎭 רולים', value: roles });
-  }
-  await interaction.reply({ embeds: [embed], ephemeral: true });
-}
-async function handleServerInfo(interaction) {
-  const guild = interaction.guild;
-  const members = guild.memberCount;
-  const bots = guild.members.cache.filter(m => m.user.bot).size;
-  const embed = new EmbedBuilder()
-    .setTitle(`🏠 ${guild.name}`)
-    .setThumbnail(guild.iconURL({ dynamic: true }))
-    .addFields(
-      { name: '🆔 ID', value: guild.id, inline: true },
-      { name: '👑 בעלים', value: `<@${guild.ownerId}>`, inline: true },
-      { name: '📅 נוצר ב', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`, inline: true },
-      { name: '👥 חברים', value: `${members - bots} 👤 | ${bots} 🤖`, inline: true },
-      { name: '📢 ערוצים', value: `${guild.channels.cache.size}`, inline: true },
-      { name: '🎭 רולים', value: `${guild.roles.cache.size}`, inline: true },
-      { name: '💎 רמת בוסט', value: `Level ${guild.premiumTier} (${guild.premiumSubscriptionCount || 0} boosts)`, inline: true },
-      { name: '🎫 טיקטים', value: `${DB.ticketStats.total} סה"כ | ${DB.ticketStats.closed} סגורים`, inline: true },
-    )
-    .setColor(0x5865F2)
-    .setTimestamp();
-  await interaction.reply({ embeds: [embed] });
-}
-async function handleAvatar(interaction) {
-  const user = interaction.options.getUser('user') || interaction.user;
-  const url = user.displayAvatarURL({ dynamic: true, size: 1024 });
-  await interaction.reply({ embeds: [new EmbedBuilder().setTitle(`🖼️ תמונת פרופיל — ${user.tag}`).setImage(url).setColor(0x5865F2).setDescription(`[פתח בדפדפן](${url})`)] });
-}
-async function handlePing(interaction) {
-  const sent = await interaction.reply({ content: '🏓 מחשב...', fetchReply: true });
-  const latency = sent.createdTimestamp - interaction.createdTimestamp;
-  await interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🏓 Pong!').addFields({ name: '🔁 Round-trip', value: `${latency}ms`, inline: true }, { name: '💓 API Latency', value: `${Math.round(interaction.client.ws.ping)}ms`, inline: true }).setColor(latency < 100 ? 0x57F287 : latency < 300 ? 0xFEE75C : 0xED4245)], content: null });
-}
-async function handleMath(interaction) {
-  const expr = interaction.options.getString('expression');
-  try {
-    const result = Function(`'use strict'; return (${expr.replace(/[^0-9+\-*/.()%^ ]/g, '')})`)();
-    if (isNaN(result) || !isFinite(result)) throw new Error('Invalid');
-    await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🔢 מחשבון').addFields({ name: '📝 ביטוי', value: `\`${expr}\``, inline: true }, { name: '✅ תוצאה', value: `**${result}**`, inline: true }).setColor(0x5865F2)] });
-  } catch { await interaction.reply({ content: '❌ ביטוי לא תקין.', ephemeral: true }); }
-}
-async function handleCoinflip(interaction) {
-  const result = Math.random() < 0.5 ? '👑 עץ' : '✨ פלי';
-  await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🪙 הטלת מטבע').setDescription(`**${result}**`).setColor(0xFFD700)] });
-}
-async function handleDice(interaction) {
-  const sides = interaction.options.getInteger('sides') || 6;
-  const result = Math.floor(Math.random() * sides) + 1;
-  await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🎲 הטלת קוביה').setDescription(`**${result}** / ${sides}`).setColor(0x5865F2)] });
-}
-async function handle8Ball(interaction) {
-  const answers = ['בהחלט כן! ✅', 'נראה שכן 🟢', 'כנראה שכן', 'שאל מאוחר יותר ⏳', 'לא בטוח 🤔', 'כנראה שלא 🔴', 'לא נראה', 'בהחלט לא! ❌', 'המגיקון אומר: כן 🎱', 'לא עכשיו...'];
-  const question = interaction.options.getString('question');
-  const answer = answers[Math.floor(Math.random() * answers.length)];
-  await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🎱 Magic 8-Ball').addFields({ name: '❓ שאלה', value: question }, { name: '🎱 תשובה', value: `**${answer}**` }).setColor(0x5865F2)] });
-}
-async function handleEmbedCommand(interaction) {
-  if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
-  const modal = new ModalBuilder().setCustomId('embed_builder_modal').setTitle('📝 בנה Embed');
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('embed_title').setLabel('כותרת').setStyle(TextInputStyle.Short).setRequired(false)),
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('embed_desc').setLabel('תיאור').setStyle(TextInputStyle.Paragraph).setRequired(true)),
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('embed_color').setLabel('צבע hex (לדוג: #5865F2)').setStyle(TextInputStyle.Short).setRequired(false)),
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('embed_footer').setLabel('פוטר (אופציונלי)').setStyle(TextInputStyle.Short).setRequired(false)),
-  );
-  await interaction.showModal(modal);
-}
-async function handleEmbedModal(interaction) {
-  const title = interaction.fields.getTextInputValue('embed_title') || null;
-  const desc  = interaction.fields.getTextInputValue('embed_desc');
-  const colorStr = interaction.fields.getTextInputValue('embed_color') || '#5865F2';
-  const footer = interaction.fields.getTextInputValue('embed_footer') || null;
-  const color = parseInt(colorStr.replace('#', ''), 16) || 0x5865F2;
-  const embed = new EmbedBuilder().setDescription(desc).setColor(color).setTimestamp();
-  if (title) embed.setTitle(title);
-  if (footer) embed.setFooter({ text: footer });
-  await interaction.reply({ embeds: [embed] });
-}
-
-// ═══════════════════════════════════════════════════════
 //  CLIENT
 // ═══════════════════════════════════════════════════════
 const client = new Client({
@@ -991,7 +649,7 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.GuildMember],
 });
 
-// ── Simple activity rotation (basic) ──
+// ── סטטוס מסתובב + נוכחות "אונליין" מפורשת ──
 function startActivityRotation(client) {
   let phase = 0;
   const update = async () => {
@@ -1003,7 +661,10 @@ function startActivityRotation(client) {
         `🎫 ${DB.ticketStats.total} טיקטים טופלו`,
         `🎉 ${Object.keys(DB.giveaways).length} הגרלות`,
       ];
-      client.user.setActivity({ name: 'Custom Status', state: statuses[phase % statuses.length], type: ActivityType.Custom });
+      client.user.setPresence({
+        status: 'online',
+        activities: [{ name: 'Custom Status', state: statuses[phase % statuses.length], type: ActivityType.Custom }]
+      });
       phase++;
     } catch (err) { console.error('Status error:', err); }
   };
@@ -1026,44 +687,22 @@ client.on('interactionCreate', async (interaction) => {
       const cmd = interaction.commandName;
       if (cmd === 'setup-tickets')       return setupTickets(interaction);
       if (cmd === 'setup-verify')        return setupVerify(interaction);
-      if (cmd === 'broadcast')           return broadcast(interaction);
       if (cmd === 'giveaway')            return createGiveaway(interaction);
       if (cmd === 'endgiveaway')         return endGiveawayCommand(interaction);
       if (cmd === 'reroll')              return rerollGiveaway(interaction);
-      if (cmd === 'antilink')            return handleAntiLinkCommand(interaction);
-      if (cmd === 'warn')                return handleWarn(interaction, client);
-      if (cmd === 'warnings')            return handleWarnings(interaction);
-      if (cmd === 'clearwarns')          return handleClearWarns(interaction);
-      if (cmd === 'note')                return handleNote(interaction);
-      if (cmd === 'notes')               return handleNotes(interaction);
-      if (cmd === 'userinfo')            return handleUserInfo(interaction);
-      if (cmd === 'serverinfo')          return handleServerInfo(interaction);
       if (cmd === 'kick')                return handleKick(interaction, client);
       if (cmd === 'ban')                 return handleBan(interaction, client);
       if (cmd === 'unban')               return handleUnban(interaction, client);
       if (cmd === 'timeout')             return handleTimeout(interaction, client);
-      if (cmd === 'untimeout')           return handleUntimeout(interaction);
+      if (cmd === 'untimeout')           return handleUntimeout(interaction, client);
       if (cmd === 'purge')               return handlePurge(interaction, client);
       if (cmd === 'slowmode')            return handleSlowmode(interaction);
       if (cmd === 'lock')                return handleLock(interaction);
       if (cmd === 'unlock')              return handleUnlock(interaction);
-      if (cmd === 'automod')             return handleAutoModCommand(interaction);
-      if (cmd === 'avatar')              return handleAvatar(interaction);
-      if (cmd === 'ping')                return handlePing(interaction);
-      if (cmd === 'math')                return handleMath(interaction);
-      if (cmd === 'coinflip')            return handleCoinflip(interaction);
-      if (cmd === 'dice')                return handleDice(interaction);
-      if (cmd === '8ball')               return handle8Ball(interaction);
-      if (cmd === 'embed')               return handleEmbedCommand(interaction);
       if (cmd === 'set-log-channel') {
-        if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
+        if (!isTeam(interaction.member)) return interaction.reply(denyEmbed('רק צוות.'));
         CONFIG.LOG_CHANNEL_ID = interaction.options.getChannel('channel').id;
         return interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ ערוץ הלוגים הוגדר ל<#${CONFIG.LOG_CHANNEL_ID}>`).setColor(0x57F287)], ephemeral: true });
-      }
-      if (cmd === 'set-boost-channel') {
-        if (!isTeam(interaction.member)) return interaction.reply({ content: '❌ רק צוות.', ephemeral: true });
-        CONFIG.BOOST_CHANNEL_ID = interaction.options.getChannel('channel').id;
-        return interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ ערוץ בוסט הוגדר ל<#${CONFIG.BOOST_CHANNEL_ID}>`).setColor(0x57F287)], ephemeral: true });
       }
     }
 
@@ -1087,7 +726,6 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isModalSubmit()) {
       const id = interaction.customId;
       if (id === 'ticket_rename_modal') return handleTicketRenameModal(interaction);
-      if (id === 'embed_builder_modal') return handleEmbedModal(interaction);
     }
 
   } catch (err) {
@@ -1115,11 +753,6 @@ client.on('messageUpdate',      (old, nw)              => logMessageEdit(old, nw
 client.on('guildMemberUpdate',  (oldMember, newMember) => handleProtectedMemberUpdate(oldMember, newMember, client));
 client.on('channelDelete',      (channel)              => handleChannelDelete(channel, client));
 client.on('roleDelete',         (role)                 => handleRoleDelete(role, client));
-client.on('messageCreate', async (message) => {
-  if (message.author?.bot) return;
-  await handleAntiLink(message, client);
-  await handleAutoMod(message, client);
-});
 
 // ═══════════════════════════════════════════════════════
 //  DEPLOY
