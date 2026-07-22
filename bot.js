@@ -1,6 +1,5 @@
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, Collection } = require('discord.js');
 const fs = require('fs');
-const path = require('path');
 
 const client = new Client({
     intents: [
@@ -17,7 +16,7 @@ const client = new Client({
 });
 
 const config = {
- token: process.env.DISCORD_TOKEN,
+    token: process.env.DISCORD_TOKEN,
     clientId: '1520769665494679703',
     guildId: '1489033656487121077',
     ticketCategoryId: '1529542314534371538',
@@ -29,8 +28,8 @@ const config = {
     giveawaysChannelId: '1529537109147517181',
     dropsChannelId: '1529537109147517181',
     voteChannelId: '1529544456418754602',
-    memberCountChannelId: 'MEMBER_COUNT_CHANNEL_ID',
-    botChannelId: 'BOT_CHANNEL_ID'
+    memberCountChannelId: process.env.MEMBER_COUNT_CHANNEL_ID || 'MEMBER_COUNT_CHANNEL_ID',
+    suggestionsChannelId: process.env.SUGGESTIONS_CHANNEL_ID || 'SUGGESTIONS_CHANNEL_ID'
 };
 
 // Collections
@@ -38,20 +37,16 @@ const tickets = new Collection();
 const giveaways = new Collection();
 const drops = new Collection();
 const votes = new Collection();
-const staffPanel = new Collection();
-const verificationQueue = new Collection();
-const userActivity = new Collection();
 const warnings = new Collection();
 const suggestions = new Collection();
-const reports = new Collection();
 const appeals = new Collection();
 const dailyRewards = new Collection();
 const economy = new Collection();
 const levels = new Collection();
-const autoMod = new Collection();
 const reactionRoles = new Collection();
 const customCommands = new Collection();
 const tempBans = new Collection();
+const topTen = new Collection();
 
 // Server stats
 let serverStats = {
@@ -63,14 +58,17 @@ let serverStats = {
     roles: 0
 };
 
-// Top 10 system
-const topTen = new Collection();
-
+// ==================== STARTUP ====================
 client.once('ready', async () => {
     console.log(`🔥 ${client.user.tag} is online!`);
     console.log(`🎯 Red & Black theme loaded!`);
     
-    // Register slash commands
+    await registerCommands();
+    startIntervals();
+    loadData();
+});
+
+async function registerCommands() {
     const commands = [
         new SlashCommandBuilder().setName('ticket').setDescription('📌 Open a support ticket'),
         new SlashCommandBuilder().setName('verify').setDescription('🔐 Start verification process'),
@@ -169,7 +167,9 @@ client.once('ready', async () => {
     } catch (error) {
         console.error('❌ Error registering commands:', error);
     }
+}
 
+function startIntervals() {
     updateStatus();
     setInterval(updateStatus, 60000);
     updateTopTen();
@@ -180,18 +180,26 @@ client.once('ready', async () => {
     setInterval(checkTempBans, 60000);
     saveData();
     setInterval(saveData, 600000);
-});
+}
 
+// ==================== EMBED FUNCTION ====================
+function createEmbed(title, description, color = '#ff0000') {
+    return new EmbedBuilder()
+        .setColor(color)
+        .setTitle(title)
+        .setDescription(description)
+        .setFooter({ text: '🔥 Black & Red Server', iconURL: client.user?.displayAvatarURL() })
+        .setTimestamp();
+}
+
+// ==================== UPDATE FUNCTIONS ====================
 function updateStatus() {
     const guild = client.guilds.cache.get(config.guildId);
     if (!guild) return;
     
     const memberCount = guild.memberCount;
     client.user.setPresence({
-        activities: [{ 
-            name: `${memberCount} members 🔥`, 
-            type: 3 
-        }],
+        activities: [{ name: `${memberCount} members 🔥`, type: 3 }],
         status: 'online'
     });
     
@@ -231,7 +239,7 @@ async function updateMemberCount() {
     
     const channel = guild.channels.cache.get(config.memberCountChannelId);
     if (channel) {
-        await channel.setName(`👥 ${guild.memberCount} Members`);
+        await channel.setName(`👥 ${guild.memberCount} Members`).catch(() => {});
     }
 }
 
@@ -247,6 +255,7 @@ function checkTempBans() {
     });
 }
 
+// ==================== DATA FUNCTIONS ====================
 function saveData() {
     try {
         const data = {
@@ -254,8 +263,7 @@ function saveData() {
             economy: Array.from(economy.entries()),
             levels: Array.from(levels.entries()),
             customCommands: Array.from(customCommands.entries()),
-            reactionRoles: Array.from(reactionRoles.entries()),
-            userActivity: Array.from(userActivity.entries())
+            reactionRoles: Array.from(reactionRoles.entries())
         };
         fs.writeFileSync('./data.json', JSON.stringify(data, null, 2));
     } catch (error) {
@@ -267,29 +275,26 @@ function loadData() {
     try {
         if (fs.existsSync('./data.json')) {
             const data = JSON.parse(fs.readFileSync('./data.json', 'utf8'));
-            warnings = new Collection(data.warnings);
-            economy = new Collection(data.economy);
-            levels = new Collection(data.levels);
-            customCommands = new Collection(data.customCommands);
-            reactionRoles = new Collection(data.reactionRoles);
-            userActivity = new Collection(data.userActivity);
+            if (data.warnings) warnings = new Collection(data.warnings);
+            if (data.economy) economy = new Collection(data.economy);
+            if (data.levels) levels = new Collection(data.levels);
+            if (data.customCommands) customCommands = new Collection(data.customCommands);
+            if (data.reactionRoles) reactionRoles = new Collection(data.reactionRoles);
         }
     } catch (error) {
         console.error('Error loading data:', error);
     }
 }
 
-// Black & Red Theme Embed
-function createEmbed(title, description, color = '#ff0000') {
-    return new EmbedBuilder()
-        .setColor(color)
-        .setTitle(title)
-        .setDescription(description)
-        .setFooter({ text: '🔥 Black & Red Server', iconURL: client.user.displayAvatarURL() })
-        .setTimestamp();
+async function logAction(title, description) {
+    const channel = client.channels.cache.get(config.logChannelId);
+    if (!channel) return;
+    
+    const embed = createEmbed(title, description);
+    await channel.send({ embeds: [embed] }).catch(() => {});
 }
 
-// Main interaction handler
+// ==================== INTERACTION HANDLER ====================
 client.on('interactionCreate', async interaction => {
     if (interaction.isButton()) {
         await handleButton(interaction);
@@ -302,91 +307,45 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
+// ==================== BUTTON HANDLER ====================
 async function handleButton(interaction) {
-    const { customId, user, guild } = interaction;
+    const { customId } = interaction;
     
-    // Ticket buttons
     if (customId.startsWith('ticket_')) {
         const type = customId.split('_')[1];
         await createTicket(interaction, type);
-    }
-    
-    if (customId === 'close_ticket') {
+    } else if (customId === 'close_ticket') {
         await closeTicket(interaction);
-    }
-    
-    if (customId === 'delete_ticket') {
+    } else if (customId === 'delete_ticket') {
         await deleteTicket(interaction);
-    }
-    
-    if (customId === 'claim_ticket') {
+    } else if (customId === 'claim_ticket') {
         await claimTicket(interaction);
-    }
-    
-    if (customId === 'add_user') {
+    } else if (customId === 'add_user') {
         await addUserToTicket(interaction);
-    }
-    
-    if (customId === 'remove_user') {
+    } else if (customId === 'remove_user') {
         await removeUserFromTicket(interaction);
-    }
-    
-    // Verification buttons
-    if (customId === 'verify_start') {
+    } else if (customId === 'verify_start') {
         await startVerification(interaction);
-    }
-    
-    if (customId === 'verify_accept') {
-        await acceptVerification(interaction);
-    }
-    
-    if (customId === 'verify_deny') {
-        await denyVerification(interaction);
-    }
-    
-    // Giveaway buttons
-    if (customId === 'enter_giveaway') {
+    } else if (customId === 'enter_giveaway') {
         await enterGiveaway(interaction);
-    }
-    
-    // Drop buttons
-    if (customId === 'claim_drop') {
+    } else if (customId === 'claim_drop') {
         await claimDrop(interaction);
-    }
-    
-    // Vote buttons
-    if (customId.startsWith('vote_')) {
+    } else if (customId.startsWith('vote_')) {
         await handleVote(interaction);
-    }
-    
-    // Suggestion buttons
-    if (customId === 'suggest_upvote') {
+    } else if (customId === 'suggest_upvote') {
         await handleSuggestionVote(interaction, 'upvote');
-    }
-    
-    if (customId === 'suggest_downvote') {
+    } else if (customId === 'suggest_downvote') {
         await handleSuggestionVote(interaction, 'downvote');
-    }
-    
-    // Appeal buttons
-    if (customId === 'appeal_submit') {
-        await submitAppeal(interaction);
-    }
-    
-    // Staff panel buttons
-    if (customId === 'view_tickets') {
+    } else if (customId === 'view_tickets') {
         await viewAllTickets(interaction);
-    }
-    
-    if (customId === 'staff_logs') {
+    } else if (customId === 'staff_logs') {
         await viewStaffLogs(interaction);
-    }
-    
-    if (customId === 'staff_stats') {
+    } else if (customId === 'staff_stats') {
         await viewStaffStats(interaction);
     }
 }
 
+// ==================== TICKET SYSTEM ====================
 async function createTicket(interaction, type) {
     const guild = interaction.guild;
     const member = interaction.member;
@@ -397,22 +356,10 @@ async function createTicket(interaction, type) {
         type: ChannelType.GuildText,
         parent: category,
         permissionOverwrites: [
-            {
-                id: guild.id,
-                deny: [PermissionFlagsBits.ViewChannel]
-            },
-            {
-                id: member.id,
-                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
-            },
-            {
-                id: config.adminRoleId,
-                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels]
-            },
-            {
-                id: config.modRoleId,
-                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
-            }
+            { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+            { id: member.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+            { id: config.adminRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+            { id: config.modRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
         ]
     });
     
@@ -425,44 +372,21 @@ async function createTicket(interaction, type) {
         users: [member.id]
     });
     
-    const embed = createEmbed(
-        '🎫 Ticket Created',
+    const embed = createEmbed('🎫 Ticket Created',
         `**Type:** ${type}\n**Created by:** ${member.user.tag}\n**Created at:** ${new Date().toLocaleString()}\n\nPlease describe your issue in detail.`
     );
     
-    const row = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('claim_ticket')
-                .setLabel('Claim')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji('📌'),
-            new ButtonBuilder()
-                .setCustomId('add_user')
-                .setLabel('Add User')
-                .setStyle(ButtonStyle.Success)
-                .setEmoji('➕'),
-            new ButtonBuilder()
-                .setCustomId('remove_user')
-                .setLabel('Remove User')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji('➖'),
-            new ButtonBuilder()
-                .setCustomId('close_ticket')
-                .setLabel('Close')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji('🔒'),
-            new ButtonBuilder()
-                .setCustomId('delete_ticket')
-                .setLabel('Delete')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji('🗑️')
-        );
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Primary).setEmoji('📌'),
+        new ButtonBuilder().setCustomId('add_user').setLabel('Add User').setStyle(ButtonStyle.Success).setEmoji('➕'),
+        new ButtonBuilder().setCustomId('remove_user').setLabel('Remove User').setStyle(ButtonStyle.Danger).setEmoji('➖'),
+        new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Danger).setEmoji('🔒'),
+        new ButtonBuilder().setCustomId('delete_ticket').setLabel('Delete').setStyle(ButtonStyle.Danger).setEmoji('🗑️')
+    );
     
     await channel.send({ embeds: [embed], components: [row] });
     await interaction.reply({ content: `✅ Ticket created: ${channel}`, ephemeral: true });
-    
-    logAction('🎫 Ticket Created', `${member.user.tag} created a ${type} ticket\nChannel: ${channel.name}`);
+    await logAction('🎫 Ticket Created', `${member.user.tag} created a ${type} ticket\nChannel: ${channel.name}`);
 }
 
 async function closeTicket(interaction) {
@@ -470,16 +394,14 @@ async function closeTicket(interaction) {
     const ticket = tickets.get(channel.id);
     if (!ticket) return;
     
-    const embed = createEmbed(
-        '🔒 Ticket Closed',
+    const embed = createEmbed('🔒 Ticket Closed',
         `Closed by ${interaction.user.tag}\nReason: Not provided\nTotal messages: ${ticket.messages.length}`
     );
     
     await interaction.reply({ embeds: [embed] });
     await channel.permissionOverwrites.set([]);
     tickets.delete(channel.id);
-    
-    logAction('🔒 Ticket Closed', `${interaction.user.tag} closed ticket in ${channel.name}`);
+    await logAction('🔒 Ticket Closed', `${interaction.user.tag} closed ticket in ${channel.name}`);
 }
 
 async function deleteTicket(interaction) {
@@ -498,76 +420,41 @@ async function claimTicket(interaction) {
     
     await interaction.reply({ content: '✅ You claimed this ticket!', ephemeral: true });
     await channel.send(`📌 ${interaction.user.tag} claimed this ticket`);
-    
-    logAction('📌 Ticket Claimed', `${interaction.user.tag} claimed ticket in ${channel.name}`);
+    await logAction('📌 Ticket Claimed', `${interaction.user.tag} claimed ticket in ${channel.name}`);
 }
 
 async function addUserToTicket(interaction) {
-    const modal = new ModalBuilder()
-        .setCustomId('add_user_modal')
-        .setTitle('Add User to Ticket');
-    
-    const userInput = new TextInputBuilder()
-        .setCustomId('user_id')
-        .setLabel('User ID or @mention')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-    
-    const row = new ActionRowBuilder().addComponents(userInput);
-    modal.addComponents(row);
-    
+    const modal = new ModalBuilder().setCustomId('add_user_modal').setTitle('Add User to Ticket');
+    const userInput = new TextInputBuilder().setCustomId('user_id').setLabel('User ID or @mention').setStyle(TextInputStyle.Short).setRequired(true);
+    modal.addComponents(new ActionRowBuilder().addComponents(userInput));
     await interaction.showModal(modal);
 }
 
 async function removeUserFromTicket(interaction) {
-    const modal = new ModalBuilder()
-        .setCustomId('remove_user_modal')
-        .setTitle('Remove User from Ticket');
-    
-    const userInput = new TextInputBuilder()
-        .setCustomId('user_id')
-        .setLabel('User ID')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-    
-    const row = new ActionRowBuilder().addComponents(userInput);
-    modal.addComponents(row);
-    
+    const modal = new ModalBuilder().setCustomId('remove_user_modal').setTitle('Remove User from Ticket');
+    const userInput = new TextInputBuilder().setCustomId('user_id').setLabel('User ID').setStyle(TextInputStyle.Short).setRequired(true);
+    modal.addComponents(new ActionRowBuilder().addComponents(userInput));
     await interaction.showModal(modal);
 }
 
-// Verification System
+// ==================== VERIFICATION SYSTEM ====================
 async function startVerification(interaction) {
-    const modal = new ModalBuilder()
-        .setCustomId('verify_modal')
-        .setTitle('🔐 Verification');
+    const modal = new ModalBuilder().setCustomId('verify_modal').setTitle('🔐 Verification');
     
-    const question1 = new TextInputBuilder()
-        .setCustomId('answer1')
-        .setLabel('What is the server name?')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+    const q1 = new TextInputBuilder().setCustomId('answer1').setLabel('What is the server name?').setStyle(TextInputStyle.Short).setRequired(true);
+    const q2 = new TextInputBuilder().setCustomId('answer2').setLabel('What is the owner\'s name?').setStyle(TextInputStyle.Short).setRequired(true);
+    const q3 = new TextInputBuilder().setCustomId('answer3').setLabel('What year was the server created?').setStyle(TextInputStyle.Short).setRequired(true);
     
-    const question2 = new TextInputBuilder()
-        .setCustomId('answer2')
-        .setLabel('What is the owner\'s name?')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-    
-    const question3 = new TextInputBuilder()
-        .setCustomId('answer3')
-        .setLabel('What year was the server created?')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-    
-    const row1 = new ActionRowBuilder().addComponents(question1);
-    const row2 = new ActionRowBuilder().addComponents(question2);
-    const row3 = new ActionRowBuilder().addComponents(question3);
-    modal.addComponents(row1, row2, row3);
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(q1),
+        new ActionRowBuilder().addComponents(q2),
+        new ActionRowBuilder().addComponents(q3)
+    );
     
     await interaction.showModal(modal);
 }
 
+// ==================== MODAL HANDLER ====================
 async function handleModal(interaction) {
     if (interaction.customId === 'verify_modal') {
         const answer1 = interaction.fields.getTextInputValue('answer1');
@@ -576,7 +463,6 @@ async function handleModal(interaction) {
         const guild = interaction.guild;
         const member = interaction.member;
         
-        // Verification checks
         let correct = 0;
         if (answer1.toLowerCase() === 'my server') correct++;
         if (answer2.toLowerCase() === 'owner name') correct++;
@@ -584,30 +470,21 @@ async function handleModal(interaction) {
         
         if (correct >= 2) {
             await member.roles.add(config.verifyRoleId);
-            const embed = createEmbed(
-                '✅ Verification Successful',
-                `You have been verified!\nCorrect answers: ${correct}/3`
-            );
+            const embed = createEmbed('✅ Verification Successful', `You have been verified!\nCorrect answers: ${correct}/3`);
             await interaction.reply({ embeds: [embed], ephemeral: true });
             
             const welcomeChannel = guild.channels.cache.get(config.welcomeChannelId);
             if (welcomeChannel) {
-                const welcomeEmbed = createEmbed(
-                    '👋 Welcome to the Server!',
+                const welcomeEmbed = createEmbed('👋 Welcome to the Server!',
                     `Please welcome ${member.user.tag} to our community!\nThey joined on ${new Date().toLocaleDateString()}`
                 );
                 await welcomeChannel.send({ content: `${member.user}`, embeds: [welcomeEmbed] });
             }
-            
-            logAction('✅ Verification Passed', `${member.user.tag} passed verification`);
+            await logAction('✅ Verification Passed', `${member.user.tag} passed verification`);
         } else {
-            const embed = createEmbed(
-                '❌ Verification Failed',
-                `You failed verification.\nCorrect answers: ${correct}/3\nPlease try again.`
-            );
+            const embed = createEmbed('❌ Verification Failed', `You failed verification.\nCorrect answers: ${correct}/3\nPlease try again.`);
             await interaction.reply({ embeds: [embed], ephemeral: true });
-            
-            logAction('❌ Verification Failed', `${member.user.tag} failed verification`);
+            await logAction('❌ Verification Failed', `${member.user.tag} failed verification`);
         }
     }
     
@@ -615,22 +492,11 @@ async function handleModal(interaction) {
         const userId = interaction.fields.getTextInputValue('user_id');
         const channel = interaction.channel;
         const user = await client.users.fetch(userId).catch(() => null);
+        if (!user) return interaction.reply({ content: '❌ User not found!', ephemeral: true });
         
-        if (!user) {
-            return interaction.reply({ content: '❌ User not found!', ephemeral: true });
-        }
-        
-        await channel.permissionOverwrites.create(user.id, {
-            ViewChannel: true,
-            SendMessages: true,
-            ReadMessageHistory: true
-        });
-        
+        await channel.permissionOverwrites.create(user.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
         const ticket = tickets.get(channel.id);
-        if (ticket) {
-            ticket.users.push(user.id);
-            tickets.set(channel.id, ticket);
-        }
+        if (ticket) { ticket.users.push(user.id); tickets.set(channel.id, ticket); }
         
         await interaction.reply({ content: `✅ Added ${user.tag} to the ticket!`, ephemeral: true });
         await channel.send(`➕ ${user.tag} was added to the ticket by ${interaction.user.tag}`);
@@ -640,401 +506,110 @@ async function handleModal(interaction) {
         const userId = interaction.fields.getTextInputValue('user_id');
         const channel = interaction.channel;
         const user = await client.users.fetch(userId).catch(() => null);
-        
-        if (!user) {
-            return interaction.reply({ content: '❌ User not found!', ephemeral: true });
-        }
+        if (!user) return interaction.reply({ content: '❌ User not found!', ephemeral: true });
         
         await channel.permissionOverwrites.delete(user.id).catch(() => {});
-        
         const ticket = tickets.get(channel.id);
-        if (ticket) {
-            ticket.users = ticket.users.filter(id => id !== user.id);
-            tickets.set(channel.id, ticket);
-        }
+        if (ticket) { ticket.users = ticket.users.filter(id => id !== user.id); tickets.set(channel.id, ticket); }
         
         await interaction.reply({ content: `✅ Removed ${user.tag} from the ticket!`, ephemeral: true });
         await channel.send(`➖ ${user.tag} was removed from the ticket by ${interaction.user.tag}`);
     }
 }
 
-// Giveaway System
+// ==================== COMMAND HANDLER ====================
 async function handleCommand(interaction) {
     const { commandName, options, user, guild, member } = interaction;
     
-    if (commandName === 'giveaway') {
-        if (!member.permissions.has(PermissionFlagsBits.ManageEvents)) {
-            return interaction.reply({ content: '❌ You need Manage Events permission!', ephemeral: true });
-        }
-        
-        const prize = options.getString('prize');
-        const duration = options.getInteger('duration');
-        const winners = options.getInteger('winners');
-        
-        const embed = createEmbed(
-            '🎉 Giveaway',
-            `**Prize:** ${prize}\n**Winners:** ${winners}\n**Duration:** ${duration} minutes\n**Hosted by:** ${user.tag}`
-        );
-        
-        const row = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder()
-                    .setCustomId('enter_giveaway')
-                    .setLabel('Enter')
-                    .setStyle(ButtonStyle.Success)
-                    .setEmoji('🎯')
-            );
-        
-        const channel = guild.channels.cache.get(config.giveawaysChannelId);
-        const msg = await channel.send({ embeds: [embed], components: [row] });
-        
-        giveaways.set(msg.id, {
-            prize,
-            winners,
-            endTime: Date.now() + duration * 60000,
-            host: user.id,
-            entries: [],
-            messageId: msg.id
-        });
-        
-        await interaction.reply({ content: '✅ Giveaway created!', ephemeral: true });
-        
-        setTimeout(() => endGiveaway(msg.id), duration * 60000);
-        logAction('🎉 Giveaway Created', `${user.tag} created a giveaway for ${prize}`);
-    }
-    
-    if (commandName === 'drop') {
-        if (!member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-            return interaction.reply({ content: '❌ You need Manage Channels permission!', ephemeral: true });
-        }
-        
-        const item = options.getString('item');
-        const amount = options.getInteger('amount');
-        
-        const embed = createEmbed(
-            '📦 Drop',
-            `**Item:** ${item}\n**Amount:** ${amount}\n**Status:** Active\n**Claim:** Click the button below to claim!`
-        );
-        
-        const row = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder()
-                    .setCustomId('claim_drop')
-                    .setLabel('Claim')
-                    .setStyle(ButtonStyle.Success)
-                    .setEmoji('🎁')
-            );
-        
-        const channel = guild.channels.cache.get(config.dropsChannelId);
-        const msg = await channel.send({ embeds: [embed], components: [row] });
-        
-        drops.set(msg.id, {
-            item,
-            amount,
-            claimed: [],
-            remaining: amount,
-            host: user.id
-        });
-        
-        await interaction.reply({ content: '✅ Drop created!', ephemeral: true });
-        logAction('📦 Drop Created', `${user.tag} created a drop for ${item}`);
-    }
-    
-    if (commandName === 'vote') {
-        if (!member.permissions.has(PermissionFlagsBits.ManageMessages)) {
-            return interaction.reply({ content: '❌ You need Manage Messages permission!', ephemeral: true });
-        }
-        
-        const question = options.getString('question');
-        const optionsStr = options.getString('options');
-        const optArray = optionsStr.split('|').map(o => o.trim());
-        
-        const embed = createEmbed(
-            '📊 Vote',
-            `**Question:** ${question}\n\n${optArray.map((opt, i) => `${i + 1}. ${opt}`).join('\n')}\n\nClick a button below to vote!`
-        );
-        
-        const row = new ActionRowBuilder();
-        optArray.forEach((opt, i) => {
-            row.addComponents(
-                new ButtonBuilder()
-                    .setCustomId(`vote_${i}`)
-                    .setLabel(`${i + 1}`)
-                    .setStyle(ButtonStyle.Primary)
-            );
-        });
-        
-        const channel = guild.channels.cache.get(config.voteChannelId);
-        const msg = await channel.send({ embeds: [embed], components: [row] });
-        
-        votes.set(msg.id, {
-            question,
-            options: optArray,
-            votes: {},
-            voters: [],
-            host: user.id
-        });
-        
-        await interaction.reply({ content: '✅ Vote created!', ephemeral: true });
-        logAction('📊 Vote Created', `${user.tag} created a vote: ${question}`);
-    }
-    
-    if (commandName === 'say') {
-        if (!member.permissions.has(PermissionFlagsBits.ManageMessages)) {
-            return interaction.reply({ content: '❌ You need Manage Messages permission!', ephemeral: true });
-        }
-        
-        const message = options.getString('message');
-        const channel = options.getChannel('channel');
-        
-        await channel.send(message);
-        await interaction.reply({ content: '✅ Message sent!', ephemeral: true });
-        logAction('📢 Message Sent', `${user.tag} sent a message in ${channel.name}`);
-    }
-    
-    if (commandName === 'top') {
-        const embed = createEmbed(
-            '🏆 Top 10 Members',
-            'Based on join date'
-        );
-        
-        topTen.forEach((member, rank) => {
-            embed.addFields({
-                name: `#${rank}`,
-                value: `${member.displayName} (${member.username})\nJoined: ${member.joinDate?.toLocaleDateString()}`,
-                inline: false
-            });
-        });
-        
-        await interaction.reply({ embeds: [embed] });
-    }
-    
-    if (commandName === 'panel') {
-        await showAdminPanel(interaction);
-    }
-    
-    if (commandName === 'config') {
-        await showConfigPanel(interaction);
-    }
-    
-    if (commandName === 'staff') {
-        await showStaffPanel(interaction);
-    }
-    
-    if (commandName === 'ticket') {
-        await showTicketMenu(interaction);
-    }
-    
-    if (commandName === 'verify') {
-        await showVerifyMenu(interaction);
-    }
-    
-    if (commandName === 'warn') {
-        await handleWarn(interaction);
-    }
-    
-    if (commandName === 'kick') {
-        await handleKick(interaction);
-    }
-    
-    if (commandName === 'ban') {
-        await handleBan(interaction);
-    }
-    
-    if (commandName === 'suggest') {
-        await handleSuggestion(interaction);
-    }
-    
-    if (commandName === 'report') {
-        await handleReport(interaction);
-    }
-    
-    if (commandName === 'appeal') {
-        await handleAppeal(interaction);
-    }
-    
-    if (commandName === 'daily') {
-        await handleDaily(interaction);
-    }
-    
-    if (commandName === 'balance') {
-        await handleBalance(interaction);
-    }
-    
-    if (commandName === 'level') {
-        await handleLevel(interaction);
-    }
-    
-    if (commandName === 'leaderboard') {
-        await handleLeaderboard(interaction);
-    }
-    
-    if (commandName === 'reactionrole') {
-        await handleReactionRole(interaction);
-    }
-    
-    if (commandName === 'customcmd') {
-        await handleCustomCommand(interaction);
-    }
-    
-    if (commandName === 'purge') {
-        await handlePurge(interaction);
-    }
-    
-    if (commandName === 'slowmode') {
-        await handleSlowmode(interaction);
-    }
-    
-    if (commandName === 'lockdown') {
-        await handleLockdown(interaction);
-    }
-    
-    if (commandName === 'unlock') {
-        await handleUnlock(interaction);
-    }
-    
-    if (commandName === 'announce') {
-        await handleAnnounce(interaction);
-    }
-    
-    if (commandName === 'poll') {
-        await handlePoll(interaction);
-    }
-    
-    if (commandName === 'mute') {
-        await handleMute(interaction);
-    }
-    
-    if (commandName === 'unmute') {
-        await handleUnmute(interaction);
-    }
-    
-    if (commandName === 'setnick') {
-        await handleSetNick(interaction);
-    }
-    
-    if (commandName === 'addrole') {
-        await handleAddRole(interaction);
-    }
-    
-    if (commandName === 'removerole') {
-        await handleRemoveRole(interaction);
-    }
-    
-    if (commandName === 'clearwarns') {
-        await handleClearWarns(interaction);
-    }
-    
-    if (commandName === 'warnings') {
-        await handleViewWarnings(interaction);
-    }
-    
-    if (commandName === 'serverinfo') {
-        await handleServerInfo(interaction);
-    }
-    
-    if (commandName === 'userinfo') {
-        await handleUserInfo(interaction);
-    }
-    
-    if (commandName === 'avatar') {
-        await handleAvatar(interaction);
-    }
-    
-    if (commandName === 'help') {
-        await handleHelp(interaction);
-    }
-    
-    if (commandName === 'ping') {
-        await handlePing(interaction);
+    switch(commandName) {
+        case 'ticket': await showTicketMenu(interaction); break;
+        case 'verify': await showVerifyMenu(interaction); break;
+        case 'staff': await showStaffPanel(interaction); break;
+        case 'panel': await showAdminPanel(interaction); break;
+        case 'config': await showConfigPanel(interaction); break;
+        case 'top': await showTopTen(interaction); break;
+        case 'help': await handleHelp(interaction); break;
+        case 'ping': await handlePing(interaction); break;
+        case 'serverinfo': await handleServerInfo(interaction); break;
+        case 'userinfo': await handleUserInfo(interaction); break;
+        case 'avatar': await handleAvatar(interaction); break;
+        case 'say': await handleSay(interaction); break;
+        case 'poll': await handlePoll(interaction); break;
+        case 'announce': await handleAnnounce(interaction); break;
+        case 'purge': await handlePurge(interaction); break;
+        case 'slowmode': await handleSlowmode(interaction); break;
+        case 'lockdown': await handleLockdown(interaction); break;
+        case 'unlock': await handleUnlock(interaction); break;
+        case 'warn': await handleWarn(interaction); break;
+        case 'kick': await handleKick(interaction); break;
+        case 'ban': await handleBan(interaction); break;
+        case 'mute': await handleMute(interaction); break;
+        case 'unmute': await handleUnmute(interaction); break;
+        case 'setnick': await handleSetNick(interaction); break;
+        case 'addrole': await handleAddRole(interaction); break;
+        case 'removerole': await handleRemoveRole(interaction); break;
+        case 'clearwarns': await handleClearWarns(interaction); break;
+        case 'warnings': await handleViewWarnings(interaction); break;
+        case 'suggest': await handleSuggestion(interaction); break;
+        case 'report': await handleReport(interaction); break;
+        case 'appeal': await handleAppeal(interaction); break;
+        case 'daily': await handleDaily(interaction); break;
+        case 'balance': await handleBalance(interaction); break;
+        case 'level': await handleLevel(interaction); break;
+        case 'leaderboard': await handleLeaderboard(interaction); break;
+        case 'reactionrole': await handleReactionRole(interaction); break;
+        case 'customcmd': await handleCustomCommand(interaction); break;
+        case 'giveaway': await handleGiveaway(interaction); break;
+        case 'drop': await handleDrop(interaction); break;
+        case 'vote': await handleVoteCommand(interaction); break;
+        default: break;
     }
 }
 
+// ==================== MENU FUNCTIONS ====================
 async function showTicketMenu(interaction) {
-    const embed = createEmbed(
-        '🎫 Support Tickets',
+    const embed = createEmbed('🎫 Support Tickets',
         'Select a ticket type to get started:\n\n**Support** - General support\n**Report** - Report a user\n**Suggestion** - Submit a suggestion\n**Other** - Other issues'
     );
-    
-    const row = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('ticket_Support')
-                .setLabel('Support')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji('🆘'),
-            new ButtonBuilder()
-                .setCustomId('ticket_Report')
-                .setLabel('Report')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji('⚠️'),
-            new ButtonBuilder()
-                .setCustomId('ticket_Suggestion')
-                .setLabel('Suggestion')
-                .setStyle(ButtonStyle.Success)
-                .setEmoji('💡'),
-            new ButtonBuilder()
-                .setCustomId('ticket_Other')
-                .setLabel('Other')
-                .setStyle(ButtonStyle.Secondary)
-                .setEmoji('📌')
-        );
-    
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('ticket_Support').setLabel('Support').setStyle(ButtonStyle.Primary).setEmoji('🆘'),
+        new ButtonBuilder().setCustomId('ticket_Report').setLabel('Report').setStyle(ButtonStyle.Danger).setEmoji('⚠️'),
+        new ButtonBuilder().setCustomId('ticket_Suggestion').setLabel('Suggestion').setStyle(ButtonStyle.Success).setEmoji('💡'),
+        new ButtonBuilder().setCustomId('ticket_Other').setLabel('Other').setStyle(ButtonStyle.Secondary).setEmoji('📌')
+    );
     await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
 }
 
 async function showVerifyMenu(interaction) {
-    const embed = createEmbed(
-        '🔐 Verification',
+    const embed = createEmbed('🔐 Verification',
         '**Welcome to the server!**\n\nTo gain access to all channels, please complete the verification process.\nClick the button below to start.\n\n**Requirements:**\n• Answer 3 questions\n• Get at least 2 correct\n• Be patient'
     );
-    
-    const row = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('verify_start')
-                .setLabel('Start Verification')
-                .setStyle(ButtonStyle.Success)
-                .setEmoji('✅')
-        );
-    
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('verify_start').setLabel('Start Verification').setStyle(ButtonStyle.Success).setEmoji('✅')
+    );
     await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
 }
 
+// ==================== PANEL FUNCTIONS ====================
 async function showAdminPanel(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
         return interaction.reply({ content: '❌ You need Administrator permissions!', ephemeral: true });
     }
     
-    const embed = createEmbed(
-        '⚙️ Admin Panel',
-        '**Server Management**'
-    )
-    .addFields(
-        { name: '📊 Server Stats', value: `Members: ${serverStats.members}\nOnline: ${serverStats.online}\nVoice: ${serverStats.voice}\nBoosts: ${serverStats.boosts}`, inline: true },
-        { name: '🎫 Tickets', value: `Open: ${tickets.size}`, inline: true },
-        { name: '🎉 Giveaways', value: `Active: ${giveaways.size}`, inline: true },
-        { name: '📦 Drops', value: `Active: ${drops.size}`, inline: true },
-        { name: '📊 Votes', value: `Active: ${votes.size}`, inline: true },
-        { name: '👥 Users', value: `Total: ${serverStats.members}`, inline: true },
-        { name: '📋 Channels', value: `Total: ${serverStats.channels}`, inline: true },
-        { name: '🎭 Roles', value: `Total: ${serverStats.roles}`, inline: true }
-    );
-    
-    const row = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('view_tickets')
-                .setLabel('View Tickets')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji('🎫'),
-            new ButtonBuilder()
-                .setCustomId('staff_stats')
-                .setLabel('Staff Stats')
-                .setStyle(ButtonStyle.Secondary)
-                .setEmoji('📊')
+    const embed = createEmbed('⚙️ Admin Panel', '**Server Management**')
+        .addFields(
+            { name: '📊 Server Stats', value: `Members: ${serverStats.members}\nOnline: ${serverStats.online}\nVoice: ${serverStats.voice}\nBoosts: ${serverStats.boosts}`, inline: true },
+            { name: '🎫 Tickets', value: `Open: ${tickets.size}`, inline: true },
+            { name: '🎉 Giveaways', value: `Active: ${giveaways.size}`, inline: true },
+            { name: '📦 Drops', value: `Active: ${drops.size}`, inline: true },
+            { name: '📊 Votes', value: `Active: ${votes.size}`, inline: true },
+            { name: '👥 Users', value: `Total: ${serverStats.members}`, inline: true }
         );
     
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('view_tickets').setLabel('View Tickets').setStyle(ButtonStyle.Primary).setEmoji('🎫'),
+        new ButtonBuilder().setCustomId('staff_stats').setLabel('Staff Stats').setStyle(ButtonStyle.Secondary).setEmoji('📊')
+    );
     await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
 }
 
@@ -1043,22 +618,15 @@ async function showConfigPanel(interaction) {
         return interaction.reply({ content: '❌ You need Administrator permissions!', ephemeral: true });
     }
     
-    const embed = createEmbed(
-        '⚙️ Configuration',
-        '**Current Server Configuration**'
-    )
-    .addFields(
-        { name: '📌 Ticket Category', value: `<#${config.ticketCategoryId}>`, inline: true },
-        { name: '📋 Log Channel', value: `<#${config.logChannelId}>`, inline: true },
-        { name: '👋 Welcome Channel', value: `<#${config.welcomeChannelId}>`, inline: true },
-        { name: '👑 Admin Role', value: `<@&${config.adminRoleId}>`, inline: true },
-        { name: '🛡️ Mod Role', value: `<@&${config.modRoleId}>`, inline: true },
-        { name: '✅ Verify Role', value: `<@&${config.verifyRoleId}>`, inline: true },
-        { name: '🎉 Giveaways Channel', value: `<#${config.giveawaysChannelId}>`, inline: true },
-        { name: '📦 Drops Channel', value: `<#${config.dropsChannelId}>`, inline: true },
-        { name: '📊 Vote Channel', value: `<#${config.voteChannelId}>`, inline: true }
-    );
-    
+    const embed = createEmbed('⚙️ Configuration', '**Current Server Configuration**')
+        .addFields(
+            { name: '📌 Ticket Category', value: `<#${config.ticketCategoryId}>`, inline: true },
+            { name: '📋 Log Channel', value: `<#${config.logChannelId}>`, inline: true },
+            { name: '👋 Welcome Channel', value: `<#${config.welcomeChannelId}>`, inline: true },
+            { name: '👑 Admin Role', value: `<@&${config.adminRoleId}>`, inline: true },
+            { name: '🛡️ Mod Role', value: `<@&${config.modRoleId}>`, inline: true },
+            { name: '✅ Verify Role', value: `<@&${config.verifyRoleId}>`, inline: true }
+        );
     await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
@@ -1066,246 +634,166 @@ async function showStaffPanel(interaction) {
     const staff = interaction.guild.members.cache.filter(m => 
         m.roles.cache.has(config.adminRoleId) || m.roles.cache.has(config.modRoleId)
     );
-    
     const onlineStaff = staff.filter(m => m.presence?.status !== 'offline');
     
-    const embed = createEmbed(
-        '🛡️ Staff Panel',
-        '**Staff Management**'
-    )
-    .addFields(
-        { name: '👥 Online Staff', value: `${onlineStaff.size}/${staff.size}`, inline: true },
-        { name: '🎫 Open Tickets', value: tickets.size.toString(), inline: true },
-        { name: '📋 Active Giveaways', value: giveaways.size.toString(), inline: true },
-        { name: '📦 Active Drops', value: drops.size.toString(), inline: true },
-        { name: '📊 Active Votes', value: votes.size.toString(), inline: true }
-    );
-    
-    const staffList = staff.map(m => `${m.displayName}`).join('\n');
-    if (staffList) {
-        embed.addFields({ name: '📋 Staff List', value: staffList.substring(0, 1024), inline: false });
-    }
-    
-    const row = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('view_tickets')
-                .setLabel('View Tickets')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji('🎫'),
-            new ButtonBuilder()
-                .setCustomId('staff_logs')
-                .setLabel('View Logs')
-                .setStyle(ButtonStyle.Secondary)
-                .setEmoji('📋'),
-            new ButtonBuilder()
-                .setCustomId('staff_stats')
-                .setLabel('Stats')
-                .setStyle(ButtonStyle.Success)
-                .setEmoji('📊')
+    const embed = createEmbed('🛡️ Staff Panel', '**Staff Management**')
+        .addFields(
+            { name: '👥 Online Staff', value: `${onlineStaff.size}/${staff.size}`, inline: true },
+            { name: '🎫 Open Tickets', value: tickets.size.toString(), inline: true },
+            { name: '🎉 Active Giveaways', value: giveaways.size.toString(), inline: true },
+            { name: '📦 Active Drops', value: drops.size.toString(), inline: true },
+            { name: '📊 Active Votes', value: votes.size.toString(), inline: true }
         );
     
+    const staffList = staff.map(m => `${m.displayName}`).join('\n');
+    if (staffList) embed.addFields({ name: '📋 Staff List', value: staffList.substring(0, 1024), inline: false });
+    
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('view_tickets').setLabel('View Tickets').setStyle(ButtonStyle.Primary).setEmoji('🎫'),
+        new ButtonBuilder().setCustomId('staff_logs').setLabel('View Logs').setStyle(ButtonStyle.Secondary).setEmoji('📋'),
+        new ButtonBuilder().setCustomId('staff_stats').setLabel('Stats').setStyle(ButtonStyle.Success).setEmoji('📊')
+    );
     await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
 }
 
-// Moderation Commands
+// ==================== MODERATION COMMANDS ====================
 async function handleWarn(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
         return interaction.reply({ content: '❌ You need Moderate Members permission!', ephemeral: true });
     }
+    const user = interaction.options.getUser('user');
+    const reason = interaction.options.getString('reason');
     
-    const user = options.getUser('user');
-    const reason = options.getString('reason');
-    const member = await interaction.guild.members.fetch(user.id);
-    
-    if (!warnings.has(user.id)) {
-        warnings.set(user.id, []);
-    }
-    
+    if (!warnings.has(user.id)) warnings.set(user.id, []);
     const userWarnings = warnings.get(user.id);
-    userWarnings.push({
-        reason: reason,
-        by: interaction.user.id,
-        date: new Date().toISOString()
-    });
+    userWarnings.push({ reason, by: interaction.user.id, date: new Date().toISOString() });
     warnings.set(user.id, userWarnings);
     
-    const embed = createEmbed(
-        '⚠️ Warning Issued',
-        `**User:** ${user.tag}\n**Reason:** ${reason}\n**By:** ${interaction.user.tag}\n**Total Warnings:** ${userWarnings.length}`
-    );
-    
+    const embed = createEmbed('⚠️ Warning Issued', `**User:** ${user.tag}\n**Reason:** ${reason}\n**By:** ${interaction.user.tag}\n**Total Warnings:** ${userWarnings.length}`);
     await interaction.reply({ embeds: [embed] });
     await user.send(`You have been warned in ${interaction.guild.name}: ${reason}`).catch(() => {});
-    logAction('⚠️ Warning Issued', `${interaction.user.tag} warned ${user.tag}: ${reason}`);
+    await logAction('⚠️ Warning Issued', `${interaction.user.tag} warned ${user.tag}: ${reason}`);
 }
 
 async function handleKick(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.KickMembers)) {
         return interaction.reply({ content: '❌ You need Kick Members permission!', ephemeral: true });
     }
-    
-    const user = options.getUser('user');
-    const reason = options.getString('reason') || 'No reason provided';
+    const user = interaction.options.getUser('user');
+    const reason = interaction.options.getString('reason') || 'No reason provided';
     const member = await interaction.guild.members.fetch(user.id);
-    
     await member.kick(reason);
     await interaction.reply({ content: `✅ ${user.tag} has been kicked. Reason: ${reason}` });
-    logAction('👢 Member Kicked', `${interaction.user.tag} kicked ${user.tag}: ${reason}`);
+    await logAction('👢 Member Kicked', `${interaction.user.tag} kicked ${user.tag}: ${reason}`);
 }
 
 async function handleBan(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.BanMembers)) {
         return interaction.reply({ content: '❌ You need Ban Members permission!', ephemeral: true });
     }
-    
-    const user = options.getUser('user');
-    const reason = options.getString('reason') || 'No reason provided';
-    
+    const user = interaction.options.getUser('user');
+    const reason = interaction.options.getString('reason') || 'No reason provided';
     await interaction.guild.members.ban(user, { reason });
     await interaction.reply({ content: `✅ ${user.tag} has been banned. Reason: ${reason}` });
-    logAction('🔨 Member Banned', `${interaction.user.tag} banned ${user.tag}: ${reason}`);
+    await logAction('🔨 Member Banned', `${interaction.user.tag} banned ${user.tag}: ${reason}`);
 }
 
 async function handleMute(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
         return interaction.reply({ content: '❌ You need Moderate Members permission!', ephemeral: true });
     }
-    
-    const user = options.getUser('user');
-    const duration = options.getInteger('duration');
-    const reason = options.getString('reason') || 'No reason provided';
+    const user = interaction.options.getUser('user');
+    const duration = interaction.options.getInteger('duration');
+    const reason = interaction.options.getString('reason') || 'No reason provided';
     const member = await interaction.guild.members.fetch(user.id);
-    
     await member.timeout(duration * 60000, reason);
     await interaction.reply({ content: `✅ ${user.tag} has been muted for ${duration} minutes. Reason: ${reason}` });
-    logAction('🔇 Member Muted', `${interaction.user.tag} muted ${user.tag} for ${duration} minutes: ${reason}`);
+    await logAction('🔇 Member Muted', `${interaction.user.tag} muted ${user.tag} for ${duration} minutes: ${reason}`);
 }
 
 async function handleUnmute(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
         return interaction.reply({ content: '❌ You need Moderate Members permission!', ephemeral: true });
     }
-    
-    const user = options.getUser('user');
+    const user = interaction.options.getUser('user');
     const member = await interaction.guild.members.fetch(user.id);
-    
     await member.timeout(null);
     await interaction.reply({ content: `✅ ${user.tag} has been unmuted.` });
-    logAction('🔊 Member Unmuted', `${interaction.user.tag} unmuted ${user.tag}`);
+    await logAction('🔊 Member Unmuted', `${interaction.user.tag} unmuted ${user.tag}`);
 }
 
 async function handleSetNick(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageNicknames)) {
         return interaction.reply({ content: '❌ You need Manage Nicknames permission!', ephemeral: true });
     }
-    
-    const user = options.getUser('user');
-    const nickname = options.getString('nickname');
+    const user = interaction.options.getUser('user');
+    const nickname = interaction.options.getString('nickname');
     const member = await interaction.guild.members.fetch(user.id);
-    
     await member.setNickname(nickname);
     await interaction.reply({ content: `✅ ${user.tag}'s nickname has been set to ${nickname}` });
-    logAction('✏️ Nickname Changed', `${interaction.user.tag} changed ${user.tag}'s nickname to ${nickname}`);
+    await logAction('✏️ Nickname Changed', `${interaction.user.tag} changed ${user.tag}'s nickname to ${nickname}`);
 }
 
 async function handleAddRole(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
         return interaction.reply({ content: '❌ You need Manage Roles permission!', ephemeral: true });
     }
-    
-    const user = options.getUser('user');
-    const role = options.getRole('role');
+    const user = interaction.options.getUser('user');
+    const role = interaction.options.getRole('role');
     const member = await interaction.guild.members.fetch(user.id);
-    
     await member.roles.add(role);
     await interaction.reply({ content: `✅ Added ${role.name} to ${user.tag}` });
-    logAction('➕ Role Added', `${interaction.user.tag} added ${role.name} to ${user.tag}`);
+    await logAction('➕ Role Added', `${interaction.user.tag} added ${role.name} to ${user.tag}`);
 }
 
 async function handleRemoveRole(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
         return interaction.reply({ content: '❌ You need Manage Roles permission!', ephemeral: true });
     }
-    
-    const user = options.getUser('user');
-    const role = options.getRole('role');
+    const user = interaction.options.getUser('user');
+    const role = interaction.options.getRole('role');
     const member = await interaction.guild.members.fetch(user.id);
-    
     await member.roles.remove(role);
     await interaction.reply({ content: `✅ Removed ${role.name} from ${user.tag}` });
-    logAction('➖ Role Removed', `${interaction.user.tag} removed ${role.name} from ${user.tag}`);
+    await logAction('➖ Role Removed', `${interaction.user.tag} removed ${role.name} from ${user.tag}`);
 }
 
 async function handleClearWarns(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
         return interaction.reply({ content: '❌ You need Moderate Members permission!', ephemeral: true });
     }
-    
-    const user = options.getUser('user');
+    const user = interaction.options.getUser('user');
     warnings.delete(user.id);
     await interaction.reply({ content: `✅ Cleared all warnings for ${user.tag}` });
-    logAction('🧹 Warnings Cleared', `${interaction.user.tag} cleared warnings for ${user.tag}`);
+    await logAction('🧹 Warnings Cleared', `${interaction.user.tag} cleared warnings for ${user.tag}`);
 }
 
 async function handleViewWarnings(interaction) {
-    const user = options.getUser('user');
+    const user = interaction.options.getUser('user');
     const userWarnings = warnings.get(user.id) || [];
+    if (userWarnings.length === 0) return interaction.reply({ content: `✅ ${user.tag} has no warnings.` });
     
-    if (userWarnings.length === 0) {
-        return interaction.reply({ content: `✅ ${user.tag} has no warnings.` });
-    }
-    
-    const embed = createEmbed(
-        '📋 Warnings',
-        `**User:** ${user.tag}\n**Total Warnings:** ${userWarnings.length}`
-    );
-    
+    const embed = createEmbed('📋 Warnings', `**User:** ${user.tag}\n**Total Warnings:** ${userWarnings.length}`);
     userWarnings.forEach((w, i) => {
-        embed.addFields({
-            name: `Warning #${i + 1}`,
-            value: `Reason: ${w.reason}\nBy: <@${w.by}>\nDate: ${new Date(w.date).toLocaleString()}`,
-            inline: false
-        });
+        embed.addFields({ name: `Warning #${i + 1}`, value: `Reason: ${w.reason}\nBy: <@${w.by}>\nDate: ${new Date(w.date).toLocaleString()}`, inline: false });
     });
-    
     await interaction.reply({ embeds: [embed] });
 }
 
-// Suggestion System
+// ==================== SUGGESTION SYSTEM ====================
 async function handleSuggestion(interaction) {
-    const suggestion = options.getString('suggestion');
+    const suggestion = interaction.options.getString('suggestion');
+    const embed = createEmbed('💡 New Suggestion', `**By:** ${interaction.user.tag}\n**Suggestion:** ${suggestion}`)
+        .setFooter({ text: 'Upvote or downvote this suggestion' });
     
-    const embed = createEmbed(
-        '💡 New Suggestion',
-        `**By:** ${interaction.user.tag}\n**Suggestion:** ${suggestion}`
-    )
-    .setFooter({ text: 'Upvote or downvote this suggestion' });
-    
-    const row = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('suggest_upvote')
-                .setLabel('Upvote')
-                .setStyle(ButtonStyle.Success)
-                .setEmoji('👍'),
-            new ButtonBuilder()
-                .setCustomId('suggest_downvote')
-                .setLabel('Downvote')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji('👎')
-        );
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('suggest_upvote').setLabel('Upvote').setStyle(ButtonStyle.Success).setEmoji('👍'),
+        new ButtonBuilder().setCustomId('suggest_downvote').setLabel('Downvote').setStyle(ButtonStyle.Danger).setEmoji('👎')
+    );
     
     const channel = interaction.guild.channels.cache.get(config.suggestionsChannelId || config.giveawaysChannelId);
     const msg = await channel.send({ embeds: [embed], components: [row] });
-    
-    suggestions.set(msg.id, {
-        author: interaction.user.id,
-        suggestion: suggestion,
-        upvotes: [],
-        downvotes: []
-    });
-    
+    suggestions.set(msg.id, { author: interaction.user.id, suggestion, upvotes: [], downvotes: [] });
     await interaction.reply({ content: '✅ Suggestion submitted!', ephemeral: true });
 }
 
@@ -1314,9 +802,7 @@ async function handleSuggestionVote(interaction, type) {
     if (!suggestion) return;
     
     if (type === 'upvote') {
-        if (suggestion.downvotes.includes(interaction.user.id)) {
-            suggestion.downvotes = suggestion.downvotes.filter(id => id !== interaction.user.id);
-        }
+        if (suggestion.downvotes.includes(interaction.user.id)) suggestion.downvotes = suggestion.downvotes.filter(id => id !== interaction.user.id);
         if (suggestion.upvotes.includes(interaction.user.id)) {
             suggestion.upvotes = suggestion.upvotes.filter(id => id !== interaction.user.id);
             await interaction.reply({ content: '✅ Removed your upvote', ephemeral: true });
@@ -1325,9 +811,7 @@ async function handleSuggestionVote(interaction, type) {
             await interaction.reply({ content: '✅ Added your upvote', ephemeral: true });
         }
     } else {
-        if (suggestion.upvotes.includes(interaction.user.id)) {
-            suggestion.upvotes = suggestion.upvotes.filter(id => id !== interaction.user.id);
-        }
+        if (suggestion.upvotes.includes(interaction.user.id)) suggestion.upvotes = suggestion.upvotes.filter(id => id !== interaction.user.id);
         if (suggestion.downvotes.includes(interaction.user.id)) {
             suggestion.downvotes = suggestion.downvotes.filter(id => id !== interaction.user.id);
             await interaction.reply({ content: '✅ Removed your downvote', ephemeral: true });
@@ -1336,178 +820,178 @@ async function handleSuggestionVote(interaction, type) {
             await interaction.reply({ content: '✅ Added your downvote', ephemeral: true });
         }
     }
-    
     suggestions.set(interaction.message.id, suggestion);
-    
-    const embed = interaction.message.embeds[0];
-    const updatedEmbed = EmbedBuilder.from(embed)
+    const embed = EmbedBuilder.from(interaction.message.embeds[0])
         .setFooter({ text: `Upvotes: ${suggestion.upvotes.length} | Downvotes: ${suggestion.downvotes.length}` });
-    
-    await interaction.message.edit({ embeds: [updatedEmbed] });
+    await interaction.message.edit({ embeds: [embed] });
 }
 
-// Report System
+// ==================== REPORT & APPEAL ====================
 async function handleReport(interaction) {
-    const user = options.getUser('user');
-    const reason = options.getString('reason');
-    
-    const embed = createEmbed(
-        '📋 Report Submitted',
-        `**Reported User:** ${user.tag}\n**Reason:** ${reason}\n**Reported by:** ${interaction.user.tag}`
-    );
-    
+    const user = interaction.options.getUser('user');
+    const reason = interaction.options.getString('reason');
+    const embed = createEmbed('📋 Report Submitted', `**Reported User:** ${user.tag}\n**Reason:** ${reason}\n**Reported by:** ${interaction.user.tag}`);
     const logChannel = interaction.guild.channels.cache.get(config.logChannelId);
-    if (logChannel) {
-        await logChannel.send({ embeds: [embed] });
-    }
-    
+    if (logChannel) await logChannel.send({ embeds: [embed] });
     await interaction.reply({ content: '✅ Report submitted! Staff will review it.', ephemeral: true });
-    logAction('📋 Report Submitted', `${interaction.user.tag} reported ${user.tag}: ${reason}`);
+    await logAction('📋 Report Submitted', `${interaction.user.tag} reported ${user.tag}: ${reason}`);
 }
 
-// Appeal System
 async function handleAppeal(interaction) {
-    const reason = options.getString('reason');
-    
-    const embed = createEmbed(
-        '📝 Ban Appeal',
-        `**Appellant:** ${interaction.user.tag}\n**Reason:** ${reason}\n**Status:** Pending review`
-    );
-    
+    const reason = interaction.options.getString('reason');
+    const embed = createEmbed('📝 Ban Appeal', `**Appellant:** ${interaction.user.tag}\n**Reason:** ${reason}\n**Status:** Pending review`);
     const logChannel = interaction.guild.channels.cache.get(config.logChannelId);
     if (logChannel) {
         const msg = await logChannel.send({ embeds: [embed] });
-        appeals.set(msg.id, {
-            user: interaction.user.id,
-            reason: reason,
-            status: 'pending'
-        });
+        appeals.set(msg.id, { user: interaction.user.id, reason, status: 'pending' });
     }
-    
     await interaction.reply({ content: '✅ Appeal submitted! You will be contacted.', ephemeral: true });
 }
 
-// Economy System
+// ==================== ECONOMY ====================
 async function handleDaily(interaction) {
     const userId = interaction.user.id;
     const lastClaim = dailyRewards.get(userId) || 0;
-    const cooldown = 86400000; // 24 hours
+    const cooldown = 86400000;
     
     if (Date.now() - lastClaim < cooldown) {
         const remaining = new Date(lastClaim + cooldown - Date.now());
         const hours = Math.floor(remaining / 3600000);
         const minutes = Math.floor((remaining % 3600000) / 60000);
-        return interaction.reply({ 
-            content: `⏰ You already claimed your daily reward! Come back in ${hours}h ${minutes}m.`, 
-            ephemeral: true 
-        });
+        return interaction.reply({ content: `⏰ Come back in ${hours}h ${minutes}m.`, ephemeral: true });
     }
     
     const reward = 100 + Math.floor(Math.random() * 100);
     economy.set(userId, (economy.get(userId) || 0) + reward);
     dailyRewards.set(userId, Date.now());
-    
-    const embed = createEmbed(
-        '💰 Daily Reward',
-        `You claimed your daily reward!\n**Amount:** $${reward}\n**New Balance:** $${economy.get(userId)}`
-    );
-    
+    const embed = createEmbed('💰 Daily Reward', `You claimed $${reward}!\n**New Balance:** $${economy.get(userId)}`);
     await interaction.reply({ embeds: [embed] });
 }
 
 async function handleBalance(interaction) {
-    const userId = interaction.user.id;
-    const balance = economy.get(userId) || 0;
-    
-    const embed = createEmbed(
-        '💰 Balance',
-        `**User:** ${interaction.user.tag}\n**Balance:** $${balance}`
-    );
-    
+    const balance = economy.get(interaction.user.id) || 0;
+    const embed = createEmbed('💰 Balance', `**User:** ${interaction.user.tag}\n**Balance:** $${balance}`);
     await interaction.reply({ embeds: [embed] });
 }
 
-// Leveling System
+// ==================== LEVELING ====================
 async function handleLevel(interaction) {
-    const userId = interaction.user.id;
-    const levelData = levels.get(userId) || { xp: 0, level: 1 };
-    
-    const embed = createEmbed(
-        '📊 Level',
-        `**User:** ${interaction.user.tag}\n**Level:** ${levelData.level}\n**XP:** ${levelData.xp}/${levelData.level * 100}`
-    );
-    
+    const levelData = levels.get(interaction.user.id) || { xp: 0, level: 1 };
+    const embed = createEmbed('📊 Level', `**User:** ${interaction.user.tag}\n**Level:** ${levelData.level}\n**XP:** ${levelData.xp}/${levelData.level * 100}`);
     await interaction.reply({ embeds: [embed] });
 }
 
 async function handleLeaderboard(interaction) {
-    const sorted = Array.from(levels.entries())
-        .sort((a, b) => b[1].xp - a[1].xp)
-        .slice(0, 10);
-    
-    const embed = createEmbed(
-        '🏆 Level Leaderboard',
-        'Top 10 members by XP'
-    );
-    
+    const sorted = Array.from(levels.entries()).sort((a, b) => b[1].xp - a[1].xp).slice(0, 10);
+    const embed = createEmbed('🏆 Level Leaderboard', 'Top 10 members by XP');
     sorted.forEach(([userId, data], i) => {
         const user = client.users.cache.get(userId);
-        embed.addFields({
-            name: `#${i + 1}`,
-            value: `${user?.tag || 'Unknown'} - Level ${data.level} (${data.xp} XP)`,
-            inline: false
-        });
+        embed.addFields({ name: `#${i + 1}`, value: `${user?.tag || 'Unknown'} - Level ${data.level} (${data.xp} XP)`, inline: false });
     });
-    
     await interaction.reply({ embeds: [embed] });
 }
 
-// Reaction Roles
+// ==================== REACTION ROLES ====================
 async function handleReactionRole(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
         return interaction.reply({ content: '❌ You need Manage Roles permission!', ephemeral: true });
     }
-    
-    const channel = options.getChannel('channel');
-    const messageId = options.getString('message');
-    const role = options.getRole('role');
-    const emoji = options.getString('emoji');
-    
+    const channel = interaction.options.getChannel('channel');
+    const messageId = interaction.options.getString('message');
+    const role = interaction.options.getRole('role');
+    const emoji = interaction.options.getString('emoji');
     const msg = await channel.messages.fetch(messageId);
     await msg.react(emoji);
-    
-    reactionRoles.set(`${msg.id}_${emoji}`, {
-        roleId: role.id,
-        channelId: channel.id,
-        messageId: msg.id,
-        emoji: emoji
-    });
-    
+    reactionRoles.set(`${msg.id}_${emoji}`, { roleId: role.id, channelId: channel.id, messageId: msg.id, emoji });
     await interaction.reply({ content: `✅ Reaction role setup: ${emoji} = ${role.name} in ${channel.name}`, ephemeral: true });
 }
 
-// Custom Commands
+// ==================== CUSTOM COMMANDS ====================
 async function handleCustomCommand(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
         return interaction.reply({ content: '❌ You need Manage Guild permission!', ephemeral: true });
     }
-    
-    const name = options.getString('name');
-    const response = options.getString('response');
-    
+    const name = interaction.options.getString('name');
+    const response = interaction.options.getString('response');
     customCommands.set(name.toLowerCase(), response);
     await interaction.reply({ content: `✅ Custom command created: !${name}`, ephemeral: true });
 }
 
-// Utility Commands
+// ==================== GIVEAWAY ====================
+async function handleGiveaway(interaction) {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.ManageEvents)) {
+        return interaction.reply({ content: '❌ You need Manage Events permission!', ephemeral: true });
+    }
+    const prize = interaction.options.getString('prize');
+    const duration = interaction.options.getInteger('duration');
+    const winners = interaction.options.getInteger('winners');
+    
+    const embed = createEmbed('🎉 Giveaway', `**Prize:** ${prize}\n**Winners:** ${winners}\n**Duration:** ${duration} minutes\n**Hosted by:** ${interaction.user.tag}`);
+    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('enter_giveaway').setLabel('Enter').setStyle(ButtonStyle.Success).setEmoji('🎯'));
+    const channel = interaction.guild.channels.cache.get(config.giveawaysChannelId);
+    const msg = await channel.send({ embeds: [embed], components: [row] });
+    
+    giveaways.set(msg.id, { prize, winners, endTime: Date.now() + duration * 60000, host: interaction.user.id, entries: [], messageId: msg.id });
+    await interaction.reply({ content: '✅ Giveaway created!', ephemeral: true });
+    setTimeout(() => endGiveaway(msg.id), duration * 60000);
+    await logAction('🎉 Giveaway Created', `${interaction.user.tag} created a giveaway for ${prize}`);
+}
+
+// ==================== DROP ====================
+async function handleDrop(interaction) {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+        return interaction.reply({ content: '❌ You need Manage Channels permission!', ephemeral: true });
+    }
+    const item = interaction.options.getString('item');
+    const amount = interaction.options.getInteger('amount');
+    
+    const embed = createEmbed('📦 Drop', `**Item:** ${item}\n**Amount:** ${amount}\n**Status:** Active\n**Claim:** Click the button below to claim!`);
+    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_drop').setLabel('Claim').setStyle(ButtonStyle.Success).setEmoji('🎁'));
+    const channel = interaction.guild.channels.cache.get(config.dropsChannelId);
+    const msg = await channel.send({ embeds: [embed], components: [row] });
+    
+    drops.set(msg.id, { item, amount, claimed: [], remaining: amount, host: interaction.user.id });
+    await interaction.reply({ content: '✅ Drop created!', ephemeral: true });
+    await logAction('📦 Drop Created', `${interaction.user.tag} created a drop for ${item}`);
+}
+
+// ==================== VOTE ====================
+async function handleVoteCommand(interaction) {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+        return interaction.reply({ content: '❌ You need Manage Messages permission!', ephemeral: true });
+    }
+    const question = interaction.options.getString('question');
+    const optionsStr = interaction.options.getString('options');
+    const optArray = optionsStr.split('|').map(o => o.trim());
+    
+    const embed = createEmbed('📊 Vote', `**Question:** ${question}\n\n${optArray.map((opt, i) => `${i + 1}. ${opt}`).join('\n')}\n\nClick a button below to vote!`);
+    const row = new ActionRowBuilder();
+    optArray.forEach((opt, i) => row.addComponents(new ButtonBuilder().setCustomId(`vote_${i}`).setLabel(`${i + 1}`).setStyle(ButtonStyle.Primary)));
+    const channel = interaction.guild.channels.cache.get(config.voteChannelId);
+    const msg = await channel.send({ embeds: [embed], components: [row] });
+    votes.set(msg.id, { question, options: optArray, votes: {}, voters: [], host: interaction.user.id });
+    await interaction.reply({ content: '✅ Vote created!', ephemeral: true });
+    await logAction('📊 Vote Created', `${interaction.user.tag} created a vote: ${question}`);
+}
+
+// ==================== UTILITY COMMANDS ====================
+async function handleSay(interaction) {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+        return interaction.reply({ content: '❌ You need Manage Messages permission!', ephemeral: true });
+    }
+    const message = interaction.options.getString('message');
+    const channel = interaction.options.getChannel('channel');
+    await channel.send(message);
+    await interaction.reply({ content: '✅ Message sent!', ephemeral: true });
+    await logAction('📢 Message Sent', `${interaction.user.tag} sent a message in ${channel.name}`);
+}
+
 async function handlePurge(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
         return interaction.reply({ content: '❌ You need Manage Messages permission!', ephemeral: true });
     }
-    
-    const amount = options.getInteger('amount');
+    const amount = interaction.options.getInteger('amount');
     if (amount > 100) return interaction.reply({ content: '❌ Maximum 100 messages', ephemeral: true });
-    
     await interaction.channel.bulkDelete(amount);
     await interaction.reply({ content: `✅ Deleted ${amount} messages`, ephemeral: true });
 }
@@ -1516,8 +1000,7 @@ async function handleSlowmode(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
         return interaction.reply({ content: '❌ You need Manage Channels permission!', ephemeral: true });
     }
-    
-    const seconds = options.getInteger('seconds');
+    const seconds = interaction.options.getInteger('seconds');
     await interaction.channel.setRateLimitPerUser(seconds);
     await interaction.reply({ content: `✅ Slowmode set to ${seconds} seconds` });
 }
@@ -1526,10 +1009,7 @@ async function handleLockdown(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
         return interaction.reply({ content: '❌ You need Manage Channels permission!', ephemeral: true });
     }
-    
-    await interaction.channel.permissionOverwrites.create(interaction.guild.id, {
-        SendMessages: false
-    });
+    await interaction.channel.permissionOverwrites.create(interaction.guild.id, { SendMessages: false });
     await interaction.reply({ content: '🔒 Channel locked!' });
 }
 
@@ -1537,7 +1017,6 @@ async function handleUnlock(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
         return interaction.reply({ content: '❌ You need Manage Channels permission!', ephemeral: true });
     }
-    
     await interaction.channel.permissionOverwrites.delete(interaction.guild.id);
     await interaction.reply({ content: '🔓 Channel unlocked!' });
 }
@@ -1546,15 +1025,9 @@ async function handleAnnounce(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
         return interaction.reply({ content: '❌ You need Manage Messages permission!', ephemeral: true });
     }
-    
-    const title = options.getString('title');
-    const message = options.getString('message');
-    
-    const embed = createEmbed(
-        `📢 ${title}`,
-        message
-    );
-    
+    const title = interaction.options.getString('title');
+    const message = interaction.options.getString('message');
+    const embed = createEmbed(`📢 ${title}`, message);
     await interaction.channel.send({ embeds: [embed] });
     await interaction.reply({ content: '✅ Announcement sent!', ephemeral: true });
 }
@@ -1563,388 +1036,228 @@ async function handlePoll(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
         return interaction.reply({ content: '❌ You need Manage Messages permission!', ephemeral: true });
     }
-    
-    const question = options.getString('question');
-    const optionsStr = options.getString('options');
+    const question = interaction.options.getString('question');
+    const optionsStr = interaction.options.getString('options');
     const optArray = optionsStr.split('|').map(o => o.trim());
-    
-    const embed = createEmbed(
-        '📊 Poll',
-        `**${question}**\n\n${optArray.map((opt, i) => `${i + 1}. ${opt}`).join('\n')}`
-    );
-    
+    const embed = createEmbed('📊 Poll', `**${question}**\n\n${optArray.map((opt, i) => `${i + 1}. ${opt}`).join('\n')}`);
     const msg = await interaction.channel.send({ embeds: [embed] });
-    for (let i = 0; i < optArray.length; i++) {
-        await msg.react(['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'][i] || '❓');
-    }
-    
+    const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
+    for (let i = 0; i < Math.min(optArray.length, emojis.length); i++) await msg.react(emojis[i]);
     await interaction.reply({ content: '✅ Poll created!', ephemeral: true });
 }
 
-// Info Commands
+// ==================== INFO COMMANDS ====================
+async function showTopTen(interaction) {
+    const embed = createEmbed('🏆 Top 10 Members', 'Based on join date');
+    topTen.forEach((member, rank) => {
+        embed.addFields({ name: `#${rank}`, value: `${member.displayName} (${member.username})\nJoined: ${member.joinDate?.toLocaleDateString()}`, inline: false });
+    });
+    await interaction.reply({ embeds: [embed] });
+}
+
 async function handleServerInfo(interaction) {
     const guild = interaction.guild;
-    const embed = createEmbed(
-        'ℹ️ Server Information',
-        `**Name:** ${guild.name}\n**ID:** ${guild.id}\n**Created:** ${guild.createdAt.toLocaleDateString()}\n**Owner:** ${guild.ownerId}\n**Members:** ${guild.memberCount}\n**Channels:** ${guild.channels.cache.size}\n**Roles:** ${guild.roles.cache.size}\n**Boosts:** ${guild.premiumSubscriptionCount || 0}`
+    const embed = createEmbed('ℹ️ Server Information',
+        `**Name:** ${guild.name}\n**ID:** ${guild.id}\n**Created:** ${guild.createdAt.toLocaleDateString()}\n**Owner:** <@${guild.ownerId}>\n**Members:** ${guild.memberCount}\n**Channels:** ${guild.channels.cache.size}\n**Roles:** ${guild.roles.cache.size}\n**Boosts:** ${guild.premiumSubscriptionCount || 0}`
     );
-    
     await interaction.reply({ embeds: [embed] });
 }
 
 async function handleUserInfo(interaction) {
-    const user = options.getUser('user') || interaction.user;
+    const user = interaction.options.getUser('user') || interaction.user;
     const member = await interaction.guild.members.fetch(user.id);
-    
-    const embed = createEmbed(
-        'ℹ️ User Information',
+    const embed = createEmbed('ℹ️ User Information',
         `**Username:** ${user.tag}\n**ID:** ${user.id}\n**Created:** ${user.createdAt.toLocaleDateString()}\n**Joined:** ${member.joinedAt?.toLocaleDateString()}\n**Roles:** ${member.roles.cache.map(r => r.name).join(', ')}\n**Status:** ${member.presence?.status || 'offline'}`
     );
-    
     await interaction.reply({ embeds: [embed] });
 }
 
 async function handleAvatar(interaction) {
-    const user = options.getUser('user') || interaction.user;
-    
-    const embed = createEmbed(
-        '🖼️ Avatar',
-        `**${user.tag}'s Avatar**`
-    )
-    .setImage(user.displayAvatarURL({ size: 1024, dynamic: true }));
-    
+    const user = interaction.options.getUser('user') || interaction.user;
+    const embed = createEmbed('🖼️ Avatar', `**${user.tag}'s Avatar**`).setImage(user.displayAvatarURL({ size: 1024, dynamic: true }));
     await interaction.reply({ embeds: [embed] });
 }
 
 async function handleHelp(interaction) {
-    const embed = createEmbed(
-        '❓ Help Menu',
-        `**Commands:**
-
-**Ticket System:**
-/ticket - Open a ticket
-
-**Verification:**
-/verify - Start verification
-
-**Moderation:**
-/warn - Warn a user
-/kick - Kick a user
-/ban - Ban a user
-/mute - Mute a user
-/unmute - Unmute a user
-/purge - Delete messages
-/lockdown - Lock channel
-/unlock - Unlock channel
-
-**Economy:**
-/daily - Claim daily reward
-/balance - Check balance
-
-**Leveling:**
-/level - Check level
-/leaderboard - View leaderboard
-
-**Utility:**
-/say - Send message as bot
-/poll - Create a poll
-/announce - Make announcement
-/top - View top 10
-
-**Info:**
-/serverinfo - Server info
-/userinfo - User info
-/avatar - View avatar
-/ping - Check bot ping
-
-**Staff:**
-/staff - Staff panel
-/panel - Admin panel
-/config - Configuration`
+    const embed = createEmbed('❓ Help Menu',
+        `**🎫 Ticket System:** /ticket
+**🔐 Verification:** /verify
+**🛡️ Staff:** /staff, /panel, /config
+**⚠️ Moderation:** /warn, /kick, /ban, /mute, /unmute, /purge, /lockdown, /unlock
+**💰 Economy:** /daily, /balance
+**📊 Leveling:** /level, /leaderboard
+**💡 Suggestions:** /suggest
+**📋 Reports:** /report, /appeal
+**🎉 Giveaways:** /giveaway
+**📦 Drops:** /drop
+**📊 Votes:** /vote
+**📢 Utility:** /say, /poll, /announce, /top
+**ℹ️ Info:** /serverinfo, /userinfo, /avatar, /ping`
     );
-    
     await interaction.reply({ embeds: [embed] });
-}
 }
 
 async function handlePing(interaction) {
-    const ping = client.ws.ping;
-    const embed = createEmbed(
-        '🏓 Ping',
-        `**Bot Latency:** ${ping}ms\n**API Latency:** ${Date.now() - interaction.createdTimestamp}ms`
-    );
-    
+    const embed = createEmbed('🏓 Ping', `**Bot Latency:** ${client.ws.ping}ms\n**API Latency:** ${Date.now() - interaction.createdTimestamp}ms`);
     await interaction.reply({ embeds: [embed] });
 }
 
-// Message events for leveling
-client.on('messageCreate', async message => {
-    if (message.author.bot) return;
-    if (!message.guild) return;
-    
-    // Leveling
-    const userId = message.author.id;
-    const levelData = levels.get(userId) || { xp: 0, level: 1 };
-    levelData.xp += Math.floor(Math.random() * 10) + 5;
-    
-    const neededXP = levelData.level * 100;
-    if (levelData.xp >= neededXP) {
-        levelData.xp -= neededXP;
-        levelData.level++;
-        
-        const embed = createEmbed(
-            '📊 Level Up!',
-            `🎉 ${message.author.tag} just reached level ${levelData.level}!`
-        );
-        await message.channel.send({ embeds: [embed] });
-    }
-    
-    levels.set(userId, levelData);
-    
-    // Custom commands
-    const content = message.content;
-    if (content.startsWith('!')) {
-        const cmd = content.slice(1).split(' ')[0].toLowerCase();
-        const response = customCommands.get(cmd);
-        if (response) {
-            await message.channel.send(response);
-        }
-    }
-});
-
-// Reaction role handling
-client.on('messageReactionAdd', async (reaction, user) => {
-    if (user.bot) return;
-    
-    const key = `${reaction.message.id}_${reaction.emoji.toString()}`;
-    const config = reactionRoles.get(key);
-    if (!config) return;
-    
-    const member = await reaction.message.guild.members.fetch(user.id);
-    const role = reaction.message.guild.roles.cache.get(config.roleId);
-    if (role) {
-        await member.roles.add(role);
-    }
-});
-
-client.on('messageReactionRemove', async (reaction, user) => {
-    if (user.bot) return;
-    
-    const key = `${reaction.message.id}_${reaction.emoji.toString()}`;
-    const config = reactionRoles.get(key);
-    if (!config) return;
-    
-    const member = await reaction.message.guild.members.fetch(user.id);
-    const role = reaction.message.guild.roles.cache.get(config.roleId);
-    if (role) {
-        await member.roles.remove(role);
-    }
-});
-
-// Voice state update for stats
-client.on('voiceStateUpdate', (oldState, newState) => {
-    updateStatus();
-});
-
-// Presence update
-client.on('presenceUpdate', (oldPresence, newPresence) => {
-    updateStatus();
-});
-
-// Guild member add
-client.on('guildMemberAdd', async member => {
-    // Track activity
-    updateStatus();
-    updateMemberCount();
-});
-
-// Guild member remove
-client.on('guildMemberRemove', member => {
-    updateStatus();
-    updateMemberCount();
-});
-
-// Log function
-async function logAction(title, description) {
-    const channel = client.channels.cache.get(config.logChannelId);
-    if (!channel) return;
-    
-    const embed = createEmbed(
-        title,
-        description
-    );
-    
-    await channel.send({ embeds: [embed] });
-}
-
-// Giveaway functions
+// ==================== GIVEAWAY END ====================
 async function endGiveaway(messageId) {
     const giveaway = giveaways.get(messageId);
     if (!giveaway) return;
     
     const winners = [];
     const entries = giveaway.entries;
-    
     for (let i = 0; i < Math.min(giveaway.winners, entries.length); i++) {
-        const winner = entries[Math.floor(Math.random() * entries.length)];
-        winners.push(winner);
+        winners.push(entries[Math.floor(Math.random() * entries.length)]);
     }
     
     const channel = client.channels.cache.get(config.giveawaysChannelId);
     const msg = await channel.messages.fetch(messageId);
-    
-    const embed = createEmbed(
-        '🎉 Giveaway Ended',
+    const embed = createEmbed('🎉 Giveaway Ended',
         `**Prize:** ${giveaway.prize}\n**Winners:** ${winners.map(w => `<@${w}>`).join(', ') || 'No winners'}\n**Total Entries:** ${entries.length}`
     );
-    
     await msg.edit({ embeds: [embed], components: [] });
     giveaways.delete(messageId);
-    
     if (winners.length > 0) {
         await channel.send(`🎉 Congratulations ${winners.map(w => `<@${w}>`).join(', ')}! You won: ${giveaway.prize}`);
     }
 }
 
-// Drop functions
+// ==================== DROP CLAIM ====================
 async function claimDrop(interaction) {
     const drop = drops.get(interaction.message.id);
     if (!drop) return;
-    
-    if (drop.claimed.includes(interaction.user.id)) {
-        return interaction.reply({ content: '❌ You already claimed this drop!', ephemeral: true });
-    }
-    
-    if (drop.remaining <= 0) {
-        return interaction.reply({ content: '❌ No items left in this drop!', ephemeral: true });
-    }
+    if (drop.claimed.includes(interaction.user.id)) return interaction.reply({ content: '❌ You already claimed this drop!', ephemeral: true });
+    if (drop.remaining <= 0) return interaction.reply({ content: '❌ No items left in this drop!', ephemeral: true });
     
     drop.claimed.push(interaction.user.id);
     drop.remaining--;
     drops.set(interaction.message.id, drop);
-    
     await interaction.reply({ content: `✅ You claimed: ${drop.item}`, ephemeral: true });
     
     if (drop.remaining <= 0) {
-        const embed = createEmbed(
-            '📦 Drop Ended',
-            `All items have been claimed!\n**Item:** ${drop.item}\n**Total Claimed:** ${drop.claimed.length}`
-        );
+        const embed = createEmbed('📦 Drop Ended', `All items have been claimed!\n**Item:** ${drop.item}\n**Total Claimed:** ${drop.claimed.length}`);
         await interaction.message.edit({ embeds: [embed], components: [] });
     }
 }
 
-// Vote functions
+// ==================== VOTE HANDLE ====================
 async function handleVote(interaction) {
     const vote = votes.get(interaction.message.id);
     if (!vote) return;
-    
-    if (vote.voters.includes(interaction.user.id)) {
-        return interaction.reply({ content: '❌ You already voted!', ephemeral: true });
-    }
+    if (vote.voters.includes(interaction.user.id)) return interaction.reply({ content: '❌ You already voted!', ephemeral: true });
     
     const optionIndex = parseInt(interaction.customId.split('_')[1]);
     const option = vote.options[optionIndex];
-    
     if (!vote.votes[option]) vote.votes[option] = 0;
     vote.votes[option]++;
     vote.voters.push(interaction.user.id);
-    
     votes.set(interaction.message.id, vote);
-    
     await interaction.reply({ content: `✅ You voted for: ${option}`, ephemeral: true });
 }
 
-// Giveaway enter
+// ==================== GIVEAWAY ENTER ====================
 async function enterGiveaway(interaction) {
     const giveaway = giveaways.get(interaction.message.id);
     if (!giveaway) return;
-    
-    if (giveaway.entries.includes(interaction.user.id)) {
-        return interaction.reply({ content: '❌ You already entered!', ephemeral: true });
-    }
-    
+    if (giveaway.entries.includes(interaction.user.id)) return interaction.reply({ content: '❌ You already entered!', ephemeral: true });
     giveaway.entries.push(interaction.user.id);
     giveaways.set(interaction.message.id, giveaway);
-    
     await interaction.reply({ content: '✅ You entered the giveaway!', ephemeral: true });
 }
 
-// View all tickets
+// ==================== VIEW FUNCTIONS ====================
 async function viewAllTickets(interaction) {
-    if (tickets.size === 0) {
-        return interaction.reply({ content: '📭 No open tickets.', ephemeral: true });
-    }
-    
-    const embed = createEmbed(
-        '🎫 All Tickets',
-        `**Total:** ${tickets.size}`
-    );
-    
+    if (tickets.size === 0) return interaction.reply({ content: '📭 No open tickets.', ephemeral: true });
+    const embed = createEmbed('🎫 All Tickets', `**Total:** ${tickets.size}`);
     tickets.forEach((ticket, channelId) => {
         const channel = interaction.guild.channels.cache.get(channelId);
-        embed.addFields({
-            name: `#${channel?.name || 'Unknown'}`,
-            value: `User: <@${ticket.user}>\nType: ${ticket.type}\nClaimed: ${ticket.claimed ? `<@${ticket.claimed}>` : 'No'}`,
-            inline: false
-        });
+        embed.addFields({ name: `#${channel?.name || 'Unknown'}`, value: `User: <@${ticket.user}>\nType: ${ticket.type}\nClaimed: ${ticket.claimed ? `<@${ticket.claimed}>` : 'No'}`, inline: false });
     });
-    
     await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
-// View staff logs
 async function viewStaffLogs(interaction) {
-    const embed = createEmbed(
-        '📋 Staff Logs',
-        'Recent staff actions will appear here'
-    );
-    
-    // Add recent log entries from a file or memory
-    embed.addFields({
-        name: 'Logs',
-        value: 'Staff logs are being tracked',
-        inline: false
-    });
-    
+    const embed = createEmbed('📋 Staff Logs', 'Recent staff actions will appear here');
+    embed.addFields({ name: 'Logs', value: 'Staff logs are being tracked', inline: false });
     await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
-// View staff stats
 async function viewStaffStats(interaction) {
-    const guild = interaction.guild;
-    const staff = guild.members.cache.filter(m => 
+    const staff = interaction.guild.members.cache.filter(m => 
         m.roles.cache.has(config.adminRoleId) || m.roles.cache.has(config.modRoleId)
     );
-    
-    const embed = createEmbed(
-        '📊 Staff Statistics',
+    const embed = createEmbed('📊 Staff Statistics',
         `**Total Staff:** ${staff.size}\n**Online:** ${staff.filter(m => m.presence?.status !== 'offline').size}\n**Tickets:** ${tickets.size}\n**Giveaways:** ${giveaways.size}\n**Drops:** ${drops.size}\n**Votes:** ${votes.size}`
     );
-    
     await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
-// Select menu handler
+// ==================== SELECT MENU ====================
 async function handleSelectMenu(interaction) {
     // Handle select menus if needed
 }
 
-// Error handling
-process.on('unhandledRejection', error => {
-    console.error('❌ Unhandled promise rejection:', error);
+// ==================== MESSAGE EVENTS ====================
+client.on('messageCreate', async message => {
+    if (message.author.bot || !message.guild) return;
+    
+    // Leveling
+    const userId = message.author.id;
+    const levelData = levels.get(userId) || { xp: 0, level: 1 };
+    levelData.xp += Math.floor(Math.random() * 10) + 5;
+    const neededXP = levelData.level * 100;
+    if (levelData.xp >= neededXP) {
+        levelData.xp -= neededXP;
+        levelData.level++;
+        const embed = createEmbed('📊 Level Up!', `🎉 ${message.author.tag} just reached level ${levelData.level}!`);
+        await message.channel.send({ embeds: [embed] });
+    }
+    levels.set(userId, levelData);
+    
+    // Custom commands
+    if (message.content.startsWith('!')) {
+        const cmd = message.content.slice(1).split(' ')[0].toLowerCase();
+        const response = customCommands.get(cmd);
+        if (response) await message.channel.send(response);
+    }
 });
 
-process.on('uncaughtException', error => {
-    console.error('❌ Uncaught exception:', error);
+// ==================== REACTION ROLE EVENTS ====================
+client.on('messageReactionAdd', async (reaction, user) => {
+    if (user.bot) return;
+    const key = `${reaction.message.id}_${reaction.emoji.toString()}`;
+    const roleConfig = reactionRoles.get(key);
+    if (!roleConfig) return;
+    const member = await reaction.message.guild.members.fetch(user.id);
+    const role = reaction.message.guild.roles.cache.get(roleConfig.roleId);
+    if (role) await member.roles.add(role);
 });
 
-// Load data on startup
-loadData();
+client.on('messageReactionRemove', async (reaction, user) => {
+    if (user.bot) return;
+    const key = `${reaction.message.id}_${reaction.emoji.toString()}`;
+    const roleConfig = reactionRoles.get(key);
+    if (!roleConfig) return;
+    const member = await reaction.message.guild.members.fetch(user.id);
+    const role = reaction.message.guild.roles.cache.get(roleConfig.roleId);
+    if (role) await member.roles.remove(role);
+});
 
-// Login
+// ==================== VOICE & PRESENCE EVENTS ====================
+client.on('voiceStateUpdate', () => updateStatus());
+client.on('presenceUpdate', () => updateStatus());
+client.on('guildMemberAdd', async () => { updateStatus(); updateMemberCount(); });
+client.on('guildMemberRemove', () => { updateStatus(); updateMemberCount(); });
+
+// ==================== ERROR HANDLING ====================
+process.on('unhandledRejection', error => console.error('❌ Unhandled promise rejection:', error));
+process.on('uncaughtException', error => console.error('❌ Uncaught exception:', error));
+
+// ==================== LOGIN ====================
 client.login(config.token);
-
 console.log('🔥 Black & Red Theme Bot is starting...');
 console.log('📌 Features: Tickets, Verification, Giveaways, Drops, Voting, Staff Panel, Economy, Leveling, Moderation, and more!');
-console.log('⚠️ Make sure to configure the config object with your server IDs!');
+console.log('⚠️ Make sure DISCORD_TOKEN is set in Render environment variables!');
