@@ -1619,10 +1619,52 @@ async function handleAvatar(interaction) {
 async function handleHelp(interaction) {
     const embed = createEmbed(
         '❓ Help Menu',
-        '**Commands:**\n\n**Ticket System:**\n/ticket - Open a ticket\n\n**Verification:**\n/verify - Start verification\n\n**Moderation:**\n/warn - Warn a user\n/kick - Kick a user\n/ban - Ban a user\n/mute - Mute a user\n/unmute - Unmute a user\n/purge - Delete messages\n/lockdown - Lock channel\n/unlock - Unlock channel\n\n**Economy:**\n/daily - Claim daily reward\n/balance - Check balance\n\n**Leveling:**\n/level - Check level\n/leaderboard - View leaderboard\n\n**Utility:**\n/say - Send message as bot\n/poll - Create a poll\n/announce - Make announcement\n/top - View top 10\n\n**Info:**\n/serverinfo - Server info\n/userinfo - User info\n/avatar - View avatar\n/ping - Check bot ping\n\n**Staff:**\n/staff - Staff panel\n/panel - Admin panel\n/config - Configuration`
+        `**Commands:**
+
+**Ticket System:**
+/ticket - Open a ticket
+
+**Verification:**
+/verify - Start verification
+
+**Moderation:**
+/warn - Warn a user
+/kick - Kick a user
+/ban - Ban a user
+/mute - Mute a user
+/unmute - Unmute a user
+/purge - Delete messages
+/lockdown - Lock channel
+/unlock - Unlock channel
+
+**Economy:**
+/daily - Claim daily reward
+/balance - Check balance
+
+**Leveling:**
+/level - Check level
+/leaderboard - View leaderboard
+
+**Utility:**
+/say - Send message as bot
+/poll - Create a poll
+/announce - Make announcement
+/top - View top 10
+
+**Info:**
+/serverinfo - Server info
+/userinfo - User info
+/avatar - View avatar
+/ping - Check bot ping
+
+**Staff:**
+/staff - Staff panel
+/panel - Admin panel
+/config - Configuration`
     );
     
     await interaction.reply({ embeds: [embed] });
+}
 }
 
 async function handlePing(interaction) {
