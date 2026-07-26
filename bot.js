@@ -1518,4 +1518,46 @@ if (!config.token) {
   process.exit(1);
 }
 
+// ==========================================================================
+// 🧩 מערכת זמנית — הסרת באן ממשתמש לפי ID
+// שימוש: !tempunban USER_ID
+// רק בעלי הרול 1515691031352311920 יכולים להריץ.
+// ניתן למחוק את הבלוק הזה בשלמותו כשלא צריך יותר.
+// ==========================================================================
+const TEMP_UNBAN_ALLOWED_ROLE_ID = '1515691031352311920';
+
+client.on('messageCreate', async (message) => {
+  try {
+    if (message.author.bot || !message.guild) return;
+    if (!message.content.startsWith('!tempunban')) return;
+
+    const hasAllowedRole = message.member.roles.cache.has(TEMP_UNBAN_ALLOWED_ROLE_ID);
+    if (!hasAllowedRole) return;
+
+    const args = message.content.trim().split(/\s+/);
+    const userId = args[1];
+
+    if (!userId || !/^\d{17,20}$/.test(userId)) {
+      return message.reply({ embeds: [errorEmbed('שגיאה', 'שימוש: `!tempunban USER_ID`')] });
+    }
+
+    try {
+      await message.guild.members.unban(userId, `הוסר ע"י ${message.author.tag} (מערכת זמנית)`);
+      await message.reply({ embeds: [successEmbed('✅ הבאן הוסר', `הוסרה חסימה מהמשתמש עם ID: ${userId}`)] });
+      await sendLog(
+        message.guild,
+        successEmbed('🔓 הסרת באן (זמנית)', `**מזהה:** ${userId}\n**מפעיל:** ${message.author}`),
+        'modLogsChannelId'
+      );
+    } catch (err) {
+      await message.reply({ embeds: [errorEmbed('שגיאה', 'המשתמש לא נמצא ברשימת החסומים, או שהמזהה שגוי.')] });
+    }
+  } catch (err) {
+    console.error('שגיאה במערכת tempunban:', err);
+  }
+});
+// ==========================================================================
+// 🧩 סוף המערכת הזמנית
+// ==========================================================================
+
 client.login(config.token);
