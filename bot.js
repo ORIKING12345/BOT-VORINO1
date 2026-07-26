@@ -1,8 +1,3 @@
-const http = require('http');
-http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bot is running!\n');
-}).listen(process.env.PORT || 3000);
 
 
 const {
@@ -29,15 +24,21 @@ const {
 
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios');
-// ==========================================================================
-// הגדרות (CONFIG) — ערוך כאן את כל ה-IDs, הצבעים וההודעות
-// ==========================================================================
+const axios = require('axios');const http = require('http');
+
+// שרת בסיסי שימנע מרנדר לקרוס
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot is running!\n');
+}).listen(process.env.PORT || 3000);
+
+// אובייקט ההגדרות התקין של הבוט
 const config = {
     token: process.env.BOT_TOKEN,
     clientId: "1520769665494679703",
     guildId: "1489033656487121077",
     prefix: "!"
+};
 };
 
 
