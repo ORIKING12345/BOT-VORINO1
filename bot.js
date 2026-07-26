@@ -1,6 +1,6 @@
 /**
  * ==========================================================================
- *  PURPLE BOT — בוט דיסקורד מקצועי בסגנון סגול
+ *  VORINO BOT — בוט דיסקורד מקצועי בסגנון כחול
  * ==========================================================================
  *  מערכות כלולות:
  *   1. מערכת טיקטים משוכללת (בחירת סוג טיקט, פאנל שליטה, לקיחת טיקט + הודעה
@@ -51,7 +51,7 @@ http
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(
       client.isReady && client.isReady()
-        ? `✅ Purple Bot מחובר בתור ${client.user.tag}\n`
+        ? `✅ Vorino Bot מחובר בתור ${client.user.tag}\n`
         : '🔄 הבוט עולה כרגע...\n'
     );
   })
@@ -68,12 +68,12 @@ const config = {
   "prefix": "!",
 
   "colors": {
-    "primary": "#9B59B6",
-    "dark": "#6C3483",
-    "success": "#8E44AD",
-    "danger": "#B03A2E",
-    "warning": "#A569BD",
-    "info": "#BB8FCE"
+    "primary": "#3498DB",
+    "dark": "#2C3E50",
+    "success": "#2ECC71",
+    "danger": "#E74C3C",
+    "warning": "#F39C12",
+    "info": "#5DADE2"
   },
 
   "roles": {
@@ -97,7 +97,7 @@ const config = {
   "welcome": {
     "bannerImage": "https://i.imgur.com/6YbQ0dJ.png",
     "messages": [
-      "נחתת בשרת הכי סגול שיש 💜",
+      "נחתת בשרת הכי כחול שיש 💙",
       "שמחים שהצטרפת אלינו!",
       "עוד חבר/ה מגניב/ה לקהילה 🎉"
     ]
@@ -188,7 +188,7 @@ function saveData() {
 let db = loadData();
 
 // --------------------------------------------------------------------------
-// עזרים כלליים - עיצוב סגול אחיד
+// עזרים כלליים - עיצוב כחול אחיד
 // --------------------------------------------------------------------------
 const COLORS = config.colors;
 
@@ -196,7 +196,7 @@ function baseEmbed() {
   return new EmbedBuilder()
     .setColor(COLORS.primary)
     .setTimestamp()
-    .setFooter({ text: 'Purple System', iconURL: client.user ? client.user.displayAvatarURL() : undefined });
+    .setFooter({ text: 'All Reserved Save To Vorino', iconURL: client.user ? client.user.displayAvatarURL() : undefined });
 }
 
 function successEmbed(title, description) {
@@ -327,7 +327,7 @@ async function updateBotPresence() {
     return;
   }
   client.user.setPresence({
-    activities: [{ name: `${status.count}/${status.max} שחקנים באונליין 🟣`, type: ActivityType.Watching }],
+    activities: [{ name: `${status.count}/${status.max} שחקנים באונליין 🔵`, type: ActivityType.Watching }],
     status: 'online',
   });
 }
@@ -344,7 +344,7 @@ function buildTicketPanelEmbed() {
         'ברוכים הבאים למערכת התמיכה שלנו!',
         '',
         'בחר/י את הנושא המתאים מהתפריט למטה כדי לפתוח טיקט חדש.',
-        'צוות התמיכה שלנו יטפל בפנייתך בהקדם האפשרי 💜',
+        'צוות התמיכה שלנו יטפל בפנייתך בהקדם האפשרי 💙',
         '',
         '**חוקי פתיחת טיקט:**',
         '• יש לפתוח טיקט אחד בלבד לכל נושא',
@@ -353,7 +353,6 @@ function buildTicketPanelEmbed() {
       ].join('\n')
     )
     .setThumbnail(client.user ? client.user.displayAvatarURL() : null)
-    .setImage('https://i.imgur.com/6YbQ0dJ.png')
     .setColor(COLORS.primary);
 }
 
@@ -659,7 +658,7 @@ function buildWelcomeEmbed(member) {
 
   return baseEmbed()
     .setColor(COLORS.primary)
-    .setTitle('💜 חבר/ה חדש/ה הצטרף/ה!')
+    .setTitle('💙 חבר/ה חדש/ה הצטרף/ה!')
     .setDescription(
       [
         `ברוך/ה הבא/ה ${member} ל **${member.guild.name}**!`,
@@ -670,7 +669,6 @@ function buildWelcomeEmbed(member) {
       ].join('\n')
     )
     .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
-    .setImage(config.welcome.bannerImage)
     .addFields(
       { name: '👤 משתמש', value: `${member.user.tag}`, inline: true },
       { name: '👥 חבר/ה מספר', value: `${member.guild.memberCount}`, inline: true },
@@ -697,7 +695,7 @@ function buildVerifyPanelEmbed() {
       [
         'כדי לקבל גישה מלאה לשרת, יש ללחוץ על הכפתור למטה.',
         '',
-        'לאחר האימות תקבל/י גישה לכלל הערוצים והרול המתאים באופן מיידי 💜',
+        'לאחר האימות תקבל/י גישה לכלל הערוצים והרול המתאים באופן מיידי 💙',
         '',
         '**שימו לב:** יש לעמוד בחוקי השרת בכל עת.',
       ].join('\n')
@@ -769,7 +767,7 @@ function buildGiveawayEmbed(g, ended = false) {
       }
     );
   if (ended) e.setDescription('🔒 ההגרלה הסתיימה! לחצו על הכפתור למטה כדי לראות את הזוכים.');
-  else e.setDescription('לחצו על הכפתור למטה כדי להצטרף להגרלה! בהצלחה 💜');
+  else e.setDescription('לחצו על הכפתור למטה כדי להצטרף להגרלה! בהצלחה 💙');
   return e;
 }
 
@@ -1416,7 +1414,7 @@ client.once('ready', async () => {
   restoreGiveawaysOnStartup();
   await updateBotPresence();
   setInterval(updateBotPresence, 60 * 1000); // עדכון סטטוס כל דקה
-  console.log('💜 Purple Bot מוכן לפעולה!');
+  console.log('💙 Vorino Bot מוכן לפעולה!');
 });
 
 client.on('interactionCreate', async (interaction) => {
