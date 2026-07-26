@@ -39,13 +39,32 @@ const {
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const http = require('http');
+
+// --------------------------------------------------------------------------
+// שרת HTTP קטן — נדרש כדי שרנדר (Render) יזהה את השירות כ-"Web Service" חי.
+// רנדר בודק פינג על הפורט הזה כדי לוודא שהתהליך לא קרס.
+// --------------------------------------------------------------------------
+const PORT = process.env.PORT || 3000;
+http
+  .createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(
+      client.isReady && client.isReady()
+        ? `✅ Purple Bot מחובר בתור ${client.user.tag}\n`
+        : '🔄 הבוט עולה כרגע...\n'
+    );
+  })
+  .listen(PORT, () => console.log(`🌐 HTTP keepalive server מאזין על פורט ${PORT}`));
+
 // ==========================================================================
-// הגדרות (CONFIG) — ערוך כאן את כל ה-IDs, הצבעים וההודעות
+// הגדרות (CONFIG) — ה-IDs נטענים ממשתני סביבה (Render → Environment) כשהם
+// רגישים (טוקן), והשאר מוגדרים ישירות. אפשר לשנות הכל כאן.
 // ==========================================================================
 const config = {
-  "token": "YOUR_BOT_TOKEN_HERE",
-  "clientId": "YOUR_CLIENT_ID_HERE",
-  "guildId": "YOUR_GUILD_ID_HERE",
+  "token": process.env.BOT_TOKEN,
+  "clientId": process.env.CLIENT_ID || "1520769665494679703",
+  "guildId": process.env.GUILD_ID || "1489033656487121077",
   "prefix": "!",
 
   "colors": {
@@ -58,20 +77,20 @@ const config = {
   },
 
   "roles": {
-    "staffRoleId": "STAFF_ROLE_ID",
-    "adminRoleId": "ADMIN_ROLE_ID",
-    "verifiedRoleId": "VERIFIED_ROLE_ID",
-    "mutedRoleId": "MUTED_ROLE_ID"
+    "staffRoleId": "1530926821481382049",
+    "adminRoleId": "1530926804846641372",
+    "verifiedRoleId": "1530926887310856403",
+    "mutedRoleId": "1530926882793455616"
   },
 
   "channels": {
-    "logsChannelId": "LOGS_CHANNEL_ID",
-    "modLogsChannelId": "MOD_LOGS_CHANNEL_ID",
-    "joinLeaveChannelId": "JOIN_LEAVE_CHANNEL_ID",
-    "verifyLogsChannelId": "VERIFY_LOGS_CHANNEL_ID",
-    "transcriptsChannelId": "TRANSCRIPTS_CHANNEL_ID",
-    "ticketCategoryId": "TICKET_CATEGORY_ID",
-    "giveawayChannelId": "GIVEAWAY_CHANNEL_ID"
+    "logsChannelId": "1530927234066419802",
+    "modLogsChannelId": "1530927228471349419",
+    "joinLeaveChannelId": "1530927230698655874",
+    "verifyLogsChannelId": "1530927232950730792",
+    "transcriptsChannelId": "1530933515737108531",
+    "ticketCategoryId": "1530927115967660052",
+    "giveawayChannelId": "1530927265100202056"
   },
 
   "tickets": {
@@ -1496,6 +1515,11 @@ process.on('unhandledRejection', (err) => console.error('שגיאה לא מטו�
 process.on('uncaughtException', (err) => console.error('חריגה לא מטופלת:', err));
 
 // --------------------------------------------------------------------------
-// התחברות
+// התחברות — הטוקן נלקח ממשתנה הסביבה BOT_TOKEN (מוגדר ב-Render → Environment)
 // --------------------------------------------------------------------------
+if (!config.token) {
+  console.error('❌ לא הוגדר BOT_TOKEN במשתני הסביבה. הגדר אותו ב-Render תחת Environment ונסה שוב.');
+  process.exit(1);
+}
+
 client.login(config.token);
