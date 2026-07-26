@@ -1519,38 +1519,41 @@ if (!config.token) {
 }
 
 // ==========================================================================
-// 🧩 מערכת זמנית — הסרת באן ממשתמש לפי ID
-// שימוש: !tempunban USER_ID
+// 🧩 מערכת זמנית — הסרת באן ממשתמש ספציפי
+// שימוש: !tempunban
 // רק בעלי הרול 1515691031352311920 יכולים להריץ.
 // ניתן למחוק את הבלוק הזה בשלמותו כשלא צריך יותר.
 // ==========================================================================
 const TEMP_UNBAN_ALLOWED_ROLE_ID = '1515691031352311920';
+const TEMP_UNBAN_TARGET_USER_ID = '1159560463261114539';
 
 client.on('messageCreate', async (message) => {
   try {
     if (message.author.bot || !message.guild) return;
-    if (!message.content.startsWith('!tempunban')) return;
+    if (message.content.trim() !== '!tempunban') return;
 
     const hasAllowedRole = message.member.roles.cache.has(TEMP_UNBAN_ALLOWED_ROLE_ID);
     if (!hasAllowedRole) return;
 
-    const args = message.content.trim().split(/\s+/);
-    const userId = args[1];
-
-    if (!userId || !/^\d{17,20}$/.test(userId)) {
-      return message.reply({ embeds: [errorEmbed('שגיאה', 'שימוש: `!tempunban USER_ID`')] });
-    }
+    await message.delete().catch(() => {});
 
     try {
-      await message.guild.members.unban(userId, `הוסר ע"י ${message.author.tag} (מערכת זמנית)`);
-      await message.reply({ embeds: [successEmbed('✅ הבאן הוסר', `הוסרה חסימה מהמשתמש עם ID: ${userId}`)] });
+      await message.guild.members.unban(
+        TEMP_UNBAN_TARGET_USER_ID,
+        `הוסר ע"י ${message.author.tag} (מערכת זמנית)`
+      );
+
+      const dm = await message.author.send({
+        embeds: [successEmbed('✅ הבאן הוסר', `הוסרה חסימה מהמשתמש עם ID: ${TEMP_UNBAN_TARGET_USER_ID}`)],
+      }).catch(() => {});
+
       await sendLog(
         message.guild,
-        successEmbed('🔓 הסרת באן (זמנית)', `**מזהה:** ${userId}\n**מפעיל:** ${message.author}`),
+        successEmbed('🔓 הסרת באן (זמנית)', `**מזהה:** ${TEMP_UNBAN_TARGET_USER_ID}\n**מפעיל:** ${message.author}`),
         'modLogsChannelId'
       );
     } catch (err) {
-      await message.reply({ embeds: [errorEmbed('שגיאה', 'המשתמש לא נמצא ברשימת החסומים, או שהמזהה שגוי.')] });
+      message.author.send({ embeds: [errorEmbed('שגיאה', 'המשתמש לא נמצא ברשימת החסומים.')] }).catch(() => {});
     }
   } catch (err) {
     console.error('שגיאה במערכת tempunban:', err);
