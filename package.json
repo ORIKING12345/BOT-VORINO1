@@ -1,11 +1,17 @@
 {
-  "name": "discord-bot",
+  "name": "purple-bot",
   "version": "1.0.0",
-  "main": "bot.js",
+  "description": "בוט דיסקורד סגול - טיקטים, אימות, הגרלות, FiveM ולוגים",
+  "main": "index.js",
+  "type": "commonjs",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.14.1"
+    "axios": "^1.18.1",
+    "discord.js": "^14.27.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
