@@ -77,7 +77,7 @@ const config = {
   },
 
   "roles": {
-    "staffRoleId": "1515690952658911355",
+    "staffRoleId": "",
     "adminRoleId": "1515690925458985052",
     "verifiedRoleId": "1515691031352311920",
     "mutedRoleId": "1515691026361352274"
@@ -91,7 +91,7 @@ const config = {
     "transcriptsChannelId": "1515691198180757554",
     "ticketCategoryId": "1515711863613292635",
     "giveawayChannelId": "1515691313666982028",
-    "welcomeChannelId": "1528720123559673927"
+    "welcomeChannelId": "1530927236570677299"
   },
 
   "welcome": {
