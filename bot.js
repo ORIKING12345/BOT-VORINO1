@@ -79,7 +79,7 @@ const config = {
   "roles": {
     "staffRoleId": "",
     "adminRoleId": "1515690925458985052",
-    "verifiedRoleId": "1515691031352311920",
+    "verifiedRoleId": "1530926887310856403",
     "mutedRoleId": "1515691026361352274"
   },
 
