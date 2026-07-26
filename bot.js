@@ -84,13 +84,13 @@ const config = {
   },
 
   "channels": {
-    "logsChannelId": "1515691200303075471",
-    "modLogsChannelId": "1515691205873238166",
-    "joinLeaveChannelId": "1515691207966326905",
-    "verifyLogsChannelId": "1515691200303075471",
-    "transcriptsChannelId": "1515691198180757554",
-    "ticketCategoryId": "1515711863613292635",
-    "giveawayChannelId": "1515691313666982028",
+    "logsChannelId": "1530927234066419802",
+    "modLogsChannelId": "1530927228471349419",
+    "joinLeaveChannelId": "1530927230698655874",
+    "verifyLogsChannelId": "1530927232950730792",
+    "transcriptsChannelId": "1530933515737108531",
+    "ticketCategoryId": "1530927115967660052",
+    "giveawayChannelId": "1530927265100202056",
     "welcomeChannelId": "1530927236570677299"
   },
 
