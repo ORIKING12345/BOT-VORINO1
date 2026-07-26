@@ -58,10 +58,12 @@ const axios = require('axios');
 // הגדרות (CONFIG) — ערוך כאן את כל ה-IDs, הצבעים וההודעות
 // ==========================================================================
 const config = {
-const token = process.env.BOT_TOKEN;
-  "clientId": "1520769665494679703",
-  "guildId": "1489033656487121077",
-  "prefix": "!",
+    token: process.env.BOT_TOKEN,
+    clientId: "1520769665494679703",
+    guildId: "1489033656487121077",
+    prefix: "!"
+};
+
 
   "colors": {
     "primary": "#9B59B6",
