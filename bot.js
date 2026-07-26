@@ -1,3 +1,18 @@
+const http = require('http');
+
+// יצירת שרת בסיסי כדי למנוע מרנדר לקרוס
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot is alive!\n');
+});
+
+// שימוש בפורט שרנדר נותן, או 3000 כברירת מחדל
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+});
+
+
 /**
  * ==========================================================================
  *  PURPLE BOT — בוט דיסקורד מקצועי בסגנון סגול
