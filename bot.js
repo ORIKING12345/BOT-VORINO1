@@ -90,7 +90,17 @@ const config = {
     "verifyLogsChannelId": "1530927232950730792",
     "transcriptsChannelId": "1530933515737108531",
     "ticketCategoryId": "1530927115967660052",
-    "giveawayChannelId": "1530927265100202056"
+    "giveawayChannelId": "1530927265100202056",
+    "welcomeChannelId": "1530927236570677299"
+  },
+
+  "welcome": {
+    "bannerImage": "https://i.imgur.com/6YbQ0dJ.png",
+    "messages": [
+      "נחתת בשרת הכי סגול שיש 💜",
+      "שמחים שהצטרפת אלינו!",
+      "עוד חבר/ה מגניב/ה לקהילה 🎉"
+    ]
   },
 
   "tickets": {
@@ -151,7 +161,6 @@ function defaultData() {
     ticketCounter: 0,
     verified: {},        // userId -> true
     giveaways: {},        // messageId -> { channelId, prize, endsAt, winners, hostId, participants: [], ended }
-    warns: {},        // userId -> [ { modId, reason, date } ]
   };
 }
 
@@ -641,6 +650,43 @@ async function handleTicketCloseModal(interaction) {
 }
 
 // ==========================================================================
+// מערכת ברוכים הבאים
+// ==========================================================================
+
+function buildWelcomeEmbed(member) {
+  const randomMsg =
+    config.welcome.messages[Math.floor(Math.random() * config.welcome.messages.length)];
+
+  return baseEmbed()
+    .setColor(COLORS.primary)
+    .setTitle('💜 חבר/ה חדש/ה הצטרף/ה!')
+    .setDescription(
+      [
+        `ברוך/ה הבא/ה ${member} ל **${member.guild.name}**!`,
+        '',
+        randomMsg,
+        '',
+        `🎫 לא לשכוח לעבור אימות ולפתוח טיקט אם צריך עזרה.`,
+      ].join('\n')
+    )
+    .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+    .setImage(config.welcome.bannerImage)
+    .addFields(
+      { name: '👤 משתמש', value: `${member.user.tag}`, inline: true },
+      { name: '👥 חבר/ה מספר', value: `${member.guild.memberCount}`, inline: true },
+      { name: '📅 הצטרף/ה בתאריך', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+    );
+}
+
+async function sendWelcomeMessage(member) {
+  const channelId = config.channels.welcomeChannelId;
+  if (!channelId || channelId.includes('_ID')) return;
+  const channel = await member.guild.channels.fetch(channelId).catch(() => null);
+  if (!channel) return;
+  await channel.send({ content: `${member}`, embeds: [buildWelcomeEmbed(member)] }).catch(() => {});
+}
+
+// ==========================================================================
 // מערכת אימות
 // ==========================================================================
 
@@ -948,24 +994,6 @@ const slashCommands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
 
   new SlashCommandBuilder()
-    .setName('warn')
-    .setDescription('נותן אזהרה למשתמש')
-    .addUserOption((o) => o.setName('user').setDescription('המשתמש').setRequired(true))
-    .addStringOption((o) => o.setName('reason').setDescription('סיבת האזהרה').setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
-
-  new SlashCommandBuilder()
-    .setName('warnings')
-    .setDescription('מציג את האזהרות של משתמש')
-    .addUserOption((o) => o.setName('user').setDescription('המשתמש').setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName('clearwarnings')
-    .setDescription('מנקה את האזהרות של משתמש')
-    .addUserOption((o) => o.setName('user').setDescription('המשתמש').setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
-
-  new SlashCommandBuilder()
     .setName('clear')
     .setDescription('מוחק הודעות מהערוץ')
     .addIntegerOption((o) => o.setName('amount').setDescription('כמות הודעות (1-100)').setRequired(true))
@@ -1167,39 +1195,6 @@ async function handleSlashCommand(interaction) {
       await targetMember.timeout(null);
       await interaction.reply({ embeds: [successEmbed('✅ הטיימאאוט הוסר', `הוסר טיימאאוט מ-${target.tag}`)] });
       await sendLog(guild, successEmbed('✅ הסרת טיימאאוט', `**משתמש:** ${target.tag}\n**מפעיל:** ${interaction.user}`), 'modLogsChannelId');
-      break;
-    }
-
-    case 'warn': {
-      if (!hasStaffRole(member)) return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לבצע פקודה זו.')], ephemeral: true });
-      const target = options.getUser('user');
-      const reason = options.getString('reason');
-      if (!db.warns[target.id]) db.warns[target.id] = [];
-      db.warns[target.id].push({ modId: interaction.user.id, reason, date: Date.now() });
-      saveData();
-      await interaction.reply({ embeds: [warningEmbed('⚠️ אזהרה ניתנה', `${target.tag} קיבל/ה אזהרה.\n**סיבה:** ${reason}\n**סה"כ אזהרות:** ${db.warns[target.id].length}`)] });
-      await sendLog(guild, warningEmbed('⚠️ אזהרה', `**משתמש:** ${target.tag}\n**מפעיל:** ${interaction.user}\n**סיבה:** ${reason}`), 'modLogsChannelId');
-      break;
-    }
-
-    case 'warnings': {
-      const target = options.getUser('user');
-      const warns = db.warns[target.id] || [];
-      if (!warns.length) {
-        await interaction.reply({ embeds: [infoEmbed('אין אזהרות', `${target.tag} לא קיבל/ה אזהרות.`)] });
-        break;
-      }
-      const list = warns.map((w, i) => `**${i + 1}.** ${w.reason} — <@${w.modId}> — <t:${Math.floor(w.date / 1000)}:R>`).join('\n');
-      await interaction.reply({ embeds: [infoEmbed(`⚠️ אזהרות של ${target.tag}`, list)] });
-      break;
-    }
-
-    case 'clearwarnings': {
-      if (!hasStaffRole(member)) return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לבצע פקודה זו.')], ephemeral: true });
-      const target = options.getUser('user');
-      db.warns[target.id] = [];
-      saveData();
-      await interaction.reply({ embeds: [successEmbed('🧹 אזהרות נוקו', `נוקו כל האזהרות של ${target.tag}`)] });
       break;
     }
 
@@ -1481,6 +1476,7 @@ client.on('messageCreate', async (message) => {
 client.on('guildMemberAdd', async (member) => {
   const e = successEmbed('📥 חבר חדש הצטרף', `${member} הצטרף/ה לשרת!\n**סה"כ חברים:** ${member.guild.memberCount}`);
   await sendLog(member.guild, e, 'joinLeaveChannelId');
+  await sendWelcomeMessage(member);
 });
 
 client.on('guildMemberRemove', async (member) => {
