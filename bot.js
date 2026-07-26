@@ -1,4 +1,18 @@
-
+/**
+ * ==========================================================================
+ *  PURPLE BOT — בוט דיסקורד מקצועי בסגנון סגול
+ * ==========================================================================
+ *  מערכות כלולות:
+ *   1. מערכת טיקטים משוכללת (בחירת סוג טיקט, פאנל שליטה, לקיחת טיקט + הודעה
+ *      נבחרת, סגירה עם טרנסקריפט)
+ *   2. מערכת אימות בכפתור (רול מיידי)
+ *   3. מערכת הגרלות (כפתור כניסה, ספירת משתתפים, בחירת זוכים אוטומטית)
+ *   4. מערכת סטטוס שרת FiveM (!status) + חיפוש שחקן (/player-info)
+ *   5. מערכת לוגים מלאה (באנים, טיימאאוטים, קיקים, כניסה/יציאה, אימות)
+ *   6. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
+ *   7. סטטוס בוט דינמי לפי כמות משתמשים בשרת ה-FiveM
+ * ==========================================================================
+ */
 
 const {
   Client,
@@ -24,23 +38,15 @@ const {
 
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios');const http = require('http');
-
-// שרת בסיסי שימנע מרנדר לקרוס
-http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bot is running!\n');
-}).listen(process.env.PORT || 3000);
-
-// אובייקט ההגדרות התקין של הבוט
+const axios = require('axios');
+// ==========================================================================
+// הגדרות (CONFIG) — ערוך כאן את כל ה-IDs, הצבעים וההודעות
+// ==========================================================================
 const config = {
-    token: process.env.BOT_TOKEN,
-    clientId: "1520769665494679703",
-    guildId: "1489033656487121077",
-    prefix: "!"
-};
-};
-
+  "token": "YOUR_BOT_TOKEN_HERE",
+  "clientId": "YOUR_CLIENT_ID_HERE",
+  "guildId": "YOUR_GUILD_ID_HERE",
+  "prefix": "!",
 
   "colors": {
     "primary": "#9B59B6",
@@ -52,20 +58,20 @@ const config = {
   },
 
   "roles": {
-    "staffRoleId": "1530926821481382049",
-    "adminRoleId": "1530926804846641372",
-    "verifiedRoleId": "1530926887310856403",
-    "mutedRoleId": "1530926882793455616"
+    "staffRoleId": "STAFF_ROLE_ID",
+    "adminRoleId": "ADMIN_ROLE_ID",
+    "verifiedRoleId": "VERIFIED_ROLE_ID",
+    "mutedRoleId": "MUTED_ROLE_ID"
   },
 
   "channels": {
-    "logsChannelId": "1530927234066419802",
-    "modLogsChannelId": "1530927228471349419",
-    "joinLeaveChannelId": "1530927230698655874",
-    "verifyLogsChannelId": "1530927232950730792",
-    "transcriptsChannelId": "1530933515737108531",
-    "ticketCategoryId": "1530927115967660052",
-    "giveawayChannelId": "1530927265100202056"
+    "logsChannelId": "LOGS_CHANNEL_ID",
+    "modLogsChannelId": "MOD_LOGS_CHANNEL_ID",
+    "joinLeaveChannelId": "JOIN_LEAVE_CHANNEL_ID",
+    "verifyLogsChannelId": "VERIFY_LOGS_CHANNEL_ID",
+    "transcriptsChannelId": "TRANSCRIPTS_CHANNEL_ID",
+    "ticketCategoryId": "TICKET_CATEGORY_ID",
+    "giveawayChannelId": "GIVEAWAY_CHANNEL_ID"
   },
 
   "tickets": {
@@ -1492,6 +1498,4 @@ process.on('uncaughtException', (err) => console.error('חריגה לא מטופ
 // --------------------------------------------------------------------------
 // התחברות
 // --------------------------------------------------------------------------
-// שימוש ישיר במשתנה הסביבה שהגדרת ברנדר
-client.login(process.env.BOT_TOKEN);
-
+client.login(config.token);
