@@ -63,7 +63,7 @@ http
 // ==========================================================================
 const config = {
   "token": process.env.BOT_TOKEN,
-  "clientId": process.env.CLIENT_ID || "1515704265904230450",
+  "clientId": process.env.CLIENT_ID || "1520769665494679703",
   "guildId": process.env.GUILD_ID || "1489033656487121077",
   "prefix": "!",
 
