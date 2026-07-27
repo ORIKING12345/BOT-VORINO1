@@ -178,6 +178,8 @@ function defaultData() {
     verified: {},        // userId -> true
     giveaways: {},        // messageId -> { channelId, prize, endsAt, winners, hostId, participants: [], ended }
     staffChannels: {},    // channelId -> { userId, roleId, accessRoles: [], createdAt }
+    claimLeaderboard: {}, // userId -> count של לקיחות טיקטים (לוח מובילים)
+    leaderboardPanel: null, // { channelId, messageId } של הודעת הפאנל שמתעדכנת אוטומטית
   };
 }
 
@@ -602,6 +604,8 @@ async function handleClaimMessageSelect(interaction) {
 
   const chosen = config.tickets.claimMessages.find((m) => m.value === interaction.values[0]);
   ticket.claimedBy = interaction.user.id;
+  ensureLeaderboardEntry(interaction.user.id);
+  db.claimLeaderboard[interaction.user.id] += 1;
   saveData();
 
   const claimEmbed = successEmbed('🙋 הטיקט נלקח', `הטיקט נלקח על ידי ${interaction.user}`).addFields({
@@ -626,6 +630,8 @@ async function handleClaimMessageSelect(interaction) {
     interaction.guild,
     infoEmbed('🙋 טיקט נלקח', `**טיקט:** #${ticket.ticketNumber}\n**נלקח על ידי:** ${interaction.user}\n**ערוץ:** ${interaction.channel}`)
   );
+
+  await updateLeaderboardPanel(interaction.guild);
 }
 
 async function generateTranscript(channel) {
@@ -999,6 +1005,52 @@ async function handleSecurityChecks(message) {
 }
 
 // ==========================================================================
+// מערכת לוח מובילים — לקיחות טיקטים (Claims Leaderboard)
+// ==========================================================================
+
+function medalForRank(rank) {
+  if (rank === 1) return '🥇';
+  if (rank === 2) return '🥈';
+  if (rank === 3) return '🥉';
+  return `${rank}.`;
+}
+
+function ensureLeaderboardEntry(userId) {
+  if (!(userId in db.claimLeaderboard)) {
+    db.claimLeaderboard[userId] = 0;
+    return true; // נוסף עכשיו
+  }
+  return false; // כבר היה קיים
+}
+
+function buildLeaderboardEmbed() {
+  const entries = Object.entries(db.claimLeaderboard); // [userId, count]
+  entries.sort((a, b) => b[1] - a[1]);
+
+  const lines = entries.length
+    ? entries.map(([userId, count], idx) => `${medalForRank(idx + 1)} <@${userId}> — **${count}** לקיחות`)
+    : ['אין עדיין אנשים בטבלה. אפשר להוסיף עם `/leaderboard-add`.'];
+
+  return baseEmbed()
+    .setTitle('🏆 לוח מובילים — לקיחות טיקטים')
+    .setDescription(lines.join('\n'))
+    .setColor(COLORS.primary)
+    .setFooter({ text: 'מתעדכן אוטומטית בכל לקיחת טיקט • Vorino Bot' });
+}
+
+async function updateLeaderboardPanel(guild) {
+  if (!db.leaderboardPanel) return;
+  const { channelId, messageId } = db.leaderboardPanel;
+  try {
+    const channel = await guild.channels.fetch(channelId);
+    const msg = await channel.messages.fetch(messageId);
+    await msg.edit({ embeds: [buildLeaderboardEmbed()] });
+  } catch (err) {
+    console.error('שגיאה בעדכון פאנל לוח המובילים (ייתכן שההודעה/הערוץ נמחקו):', err);
+  }
+}
+
+// ==========================================================================
 // פקודות סלאש
 // ==========================================================================
 const slashCommands = [
@@ -1137,6 +1189,33 @@ const slashCommands = [
   new SlashCommandBuilder()
     .setName('reset-ticket-stats')
     .setDescription('מאפס ידנית את מונה/טבלת הטיקטים (בלתי הפיך, אדמין בלבד)')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName('leaderboard')
+    .setDescription('מציג את לוח המובילים של לקיחות הטיקטים')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName('leaderboard-panel')
+    .setDescription('מפרסם פאנל לוח מובילים שמתעדכן אוטומטית בכל לקיחת טיקט')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName('leaderboard-add')
+    .setDescription('מוסיף משתמש ללוח המובילים (עם 0 לקיחות אם עדיין אין לו)')
+    .addUserOption((o) => o.setName('user').setDescription('המשתמש להוספה').setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName('leaderboard-remove')
+    .setDescription('מסיר משתמש מלוח המובילים')
+    .addUserOption((o) => o.setName('user').setDescription('המשתמש להסרה').setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName('leaderboard-reset')
+    .setDescription('מאפס את לוח המובילים כולו (בלתי הפיך, אדמין בלבד)')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
@@ -1641,6 +1720,79 @@ async function handleSlashCommand(interaction) {
       saveData();
       await interaction.reply({ embeds: [successEmbed('🔄 הסטטיסטיקות אופסו', 'מונה הטיקטים וטבלת הסטטיסטיקות אופסו בהצלחה.')] });
       await sendLog(guild, warningEmbed('🔄 איפוס סטטיסטיקות טיקטים', `**אופס על ידי:** ${interaction.user}`));
+      break;
+    }
+
+    case 'leaderboard': {
+      if (!hasStaffRole(member)) {
+        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק צוות יכול לצפות בלוח המובילים.')], ephemeral: true });
+      }
+      await interaction.reply({ embeds: [buildLeaderboardEmbed()] });
+      break;
+    }
+
+    case 'leaderboard-panel': {
+      if (!hasStaffRole(member)) {
+        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק צוות יכול לפרסם את הפאנל.')], ephemeral: true });
+      }
+      const panelMsg = await interaction.channel.send({ embeds: [buildLeaderboardEmbed()] });
+      db.leaderboardPanel = { channelId: interaction.channel.id, messageId: panelMsg.id };
+      saveData();
+      await interaction.reply({
+        embeds: [
+          successEmbed(
+            '✅ הפאנל פורסם',
+            'הפאנל יתעדכן אוטומטית בכל פעם שטיקט יילקח, וגם בעת שימוש בפקודות /leaderboard-add ו-/leaderboard-remove.'
+          ),
+        ],
+        ephemeral: true,
+      });
+      break;
+    }
+
+    case 'leaderboard-add': {
+      if (!hasStaffRole(member)) {
+        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק צוות יכול להוסיף לטבלה.')], ephemeral: true });
+      }
+      const target = options.getUser('user');
+      const added = ensureLeaderboardEntry(target.id);
+      saveData();
+      await updateLeaderboardPanel(guild);
+      await interaction.reply({
+        embeds: [
+          added
+            ? successEmbed('➕ נוסף/ה לטבלה', `${target} נוסף/ה ללוח המובילים עם 0 לקיחות.`)
+            : infoEmbed('כבר בטבלה', `${target} כבר נמצא/ת בלוח המובילים.`),
+        ],
+        ephemeral: true,
+      });
+      break;
+    }
+
+    case 'leaderboard-remove': {
+      if (!hasStaffRole(member)) {
+        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק צוות יכול להסיר מהטבלה.')], ephemeral: true });
+      }
+      const target = options.getUser('user');
+      if (!(target.id in db.claimLeaderboard)) {
+        return interaction.reply({ embeds: [errorEmbed('לא נמצא', `${target} לא נמצא/ת בלוח המובילים.`)], ephemeral: true });
+      }
+      delete db.claimLeaderboard[target.id];
+      saveData();
+      await updateLeaderboardPanel(guild);
+      await interaction.reply({ embeds: [successEmbed('➖ הוסר/ה מהטבלה', `${target} הוסר/ה מלוח המובילים.`)], ephemeral: true });
+      break;
+    }
+
+    case 'leaderboard-reset': {
+      if (!hasAdminRole(member)) {
+        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק אדמינים יכולים לאפס את לוח המובילים.')], ephemeral: true });
+      }
+      db.claimLeaderboard = {};
+      saveData();
+      await updateLeaderboardPanel(guild);
+      await interaction.reply({ embeds: [successEmbed('🔄 הלוח אופס', 'לוח המובילים אופס בהצלחה.')] });
+      await sendLog(guild, warningEmbed('🔄 איפוס לוח מובילים', `**אופס על ידי:** ${interaction.user}`));
       break;
     }
 
