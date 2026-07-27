@@ -34,6 +34,7 @@ const {
   SlashCommandBuilder,
   ActivityType,
   AttachmentBuilder,
+  OverwriteType,
 } = require('discord.js');
 
 const fs = require('fs');
@@ -444,9 +445,10 @@ async function createTicketChannel(interaction, typeValue) {
 
   const categoryId = config.channels.ticketCategoryId;
   const overwrites = [
-    { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
+    { id: guild.roles.everyone.id, type: OverwriteType.Role, deny: [PermissionFlagsBits.ViewChannel] },
     {
       id: member.id,
+      type: OverwriteType.Member,
       allow: [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.SendMessages,
@@ -458,6 +460,7 @@ async function createTicketChannel(interaction, typeValue) {
   if (config.roles.staffRoleId && !config.roles.staffRoleId.includes('_ID')) {
     overwrites.push({
       id: config.roles.staffRoleId,
+      type: OverwriteType.Role,
       allow: [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.SendMessages,
