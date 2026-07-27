@@ -78,10 +78,10 @@ const config = {
   },
 
   "roles": {
-    "staffRoleId": "1530926821481382049",
-    "adminRoleId": "1530926804846641372",
+    "staffRoleId": "1531040938829283468",
+    "adminRoleId": "1531041358570328158",
     "verifiedRoleId": "1530926887310856403",
-    "mutedRoleId": "1530926882793455616"
+    "mutedRoleId": "1531041382968328212"
   },
 
   "channels": {
@@ -1138,6 +1138,17 @@ const slashCommands = [
     .setName('reset-ticket-stats')
     .setDescription('מאפס ידנית את מונה/טבלת הטיקטים (בלתי הפיך, אדמין בלבד)')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName('izkor')
+    .setDescription('יוצר הנצחה לזכר חייל שנפל בהגנה על המולדת (אדמין בלבד)')
+    .addStringOption((o) => o.setName('name').setDescription('שם החייל ז"ל').setRequired(true))
+    .addStringOption((o) => o.setName('description').setDescription('תיאור / סיפור על החייל').setRequired(true))
+    .addStringOption((o) => o.setName('image').setDescription('קישור לתמונת החייל (אופציונלי)').setRequired(false))
+    .addStringOption((o) => o.setName('rank').setDescription('דרגה / תפקיד (אופציונלי)').setRequired(false))
+    .addStringOption((o) => o.setName('unit').setDescription('יחידה / חטיבה (אופציונלי)').setRequired(false))
+    .addStringOption((o) => o.setName('date').setDescription('תאריך הנפילה (אופציונלי)').setRequired(false))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 ].map((c) => c.toJSON());
 
 async function registerSlashCommands() {
@@ -1630,6 +1641,50 @@ async function handleSlashCommand(interaction) {
       saveData();
       await interaction.reply({ embeds: [successEmbed('🔄 הסטטיסטיקות אופסו', 'מונה הטיקטים וטבלת הסטטיסטיקות אופסו בהצלחה.')] });
       await sendLog(guild, warningEmbed('🔄 איפוס סטטיסטיקות טיקטים', `**אופס על ידי:** ${interaction.user}`));
+      break;
+    }
+
+    case 'izkor': {
+      if (!hasAdminRole(member)) {
+        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק אדמינים יכולים להשתמש בפקודה זו.')], ephemeral: true });
+      }
+
+      const soldierName = options.getString('name');
+      const description = options.getString('description');
+      const imageUrl = options.getString('image');
+      const rank = options.getString('rank');
+      const unit = options.getString('unit');
+      const dateStr = options.getString('date');
+
+      // ולידציה בסיסית לקישור התמונה כדי לא לשלוח embed שבור
+      if (imageUrl && !/^https?:\/\/.+\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(imageUrl.trim())) {
+        return interaction.reply({
+          embeds: [errorEmbed('קישור תמונה לא תקין', 'יש להזין קישור ישיר לתמונה (למשל מסתיים ב-.png / .jpg / .webp).')],
+          ephemeral: true,
+        });
+      }
+
+      const memorialEmbed = new EmbedBuilder()
+        .setColor(COLORS.dark)
+        .setTitle(`🕯️ לזכרו/ה של ${soldierName} ז"ל`)
+        .setDescription(description)
+        .setTimestamp()
+        .setFooter({
+          text: 'יהי זכרו/ה ברוך 🇮🇱',
+          iconURL: client.user ? client.user.displayAvatarURL() : undefined,
+        });
+
+      if (rank) memorialEmbed.addFields({ name: '🎖️ דרגה / תפקיד', value: rank, inline: true });
+      if (unit) memorialEmbed.addFields({ name: '🪖 יחידה', value: unit, inline: true });
+      if (dateStr) memorialEmbed.addFields({ name: '📅 תאריך הנפילה', value: dateStr, inline: true });
+      if (imageUrl) memorialEmbed.setImage(imageUrl.trim());
+
+      await interaction.reply({ embeds: [memorialEmbed] });
+
+      await sendLog(
+        guild,
+        infoEmbed('🕯️ פורסמה הנצחה', `**שם:** ${soldierName}\n**פורסם על ידי:** ${interaction.user}\n**ערוץ:** ${interaction.channel}`)
+      );
       break;
     }
   }
