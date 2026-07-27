@@ -78,10 +78,10 @@ const config = {
   },
 
   "roles": {
-    "staffRoleId": "1531040938829283468",
-    "adminRoleId": "1531041358570328158",
+    "staffRoleId": "1530926821481382049",
+    "adminRoleId": "1530926804846641372",
     "verifiedRoleId": "1530926887310856403",
-    "mutedRoleId": "1531041382968328212"
+    "mutedRoleId": "1530926882793455616"
   },
 
   "channels": {
