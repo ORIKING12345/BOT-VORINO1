@@ -1672,13 +1672,105 @@ async function handlePrefixCommand(message) {
   }
 }
 
+// --------------------------------------------------------------------------
+// בדיקת הרשאות הבוט + מיקומו בהיררכיית הרולים
+// רץ אוטומטית בעליית הבוט, ומדפיס/שולח ללוגים בדיוק מה חסר ומה לתקן
+// --------------------------------------------------------------------------
+async function checkBotPermissions(guild) {
+  const me = guild.members.me || (await guild.members.fetchMe().catch(() => null));
+  if (!me) {
+    console.warn('⚠️ לא הצלחתי לבדוק הרשאות בוט (לא נמצא כחבר בשרת?).');
+    return;
+  }
+
+  const hasAdmin = me.permissions.has(PermissionFlagsBits.Administrator);
+
+  const specificPerms = [
+    ['ViewChannel', PermissionFlagsBits.ViewChannel],
+    ['SendMessages', PermissionFlagsBits.SendMessages],
+    ['ManageChannels', PermissionFlagsBits.ManageChannels],
+    ['ManageRoles', PermissionFlagsBits.ManageRoles],
+    ['ManageMessages', PermissionFlagsBits.ManageMessages],
+    ['KickMembers', PermissionFlagsBits.KickMembers],
+    ['BanMembers', PermissionFlagsBits.BanMembers],
+    ['ModerateMembers', PermissionFlagsBits.ModerateMembers],
+    ['EmbedLinks', PermissionFlagsBits.EmbedLinks],
+    ['AttachFiles', PermissionFlagsBits.AttachFiles],
+    ['ReadMessageHistory', PermissionFlagsBits.ReadMessageHistory],
+  ];
+
+  const warnLines = [];
+
+  if (hasAdmin) {
+    console.log('✅ לבוט יש הרשאת Administrator — כל ההרשאות פעילות.');
+  } else {
+    const missing = specificPerms.filter(([, perm]) => !me.permissions.has(perm)).map(([name]) => name);
+    if (missing.length) {
+      console.warn(`⚠️ לבוט אין הרשאת Administrator, וחסרות לו ${missing.length} הרשאות: ${missing.join(', ')}`);
+      warnLines.push(
+        `**לבוט חסרות הרשאות:** ${missing.join(', ')}`,
+        'פתרון: הגדרות שרת → רולים → הרול של הבוט → הפעל/י Administrator (או את ההרשאות החסרות בנפרד).'
+      );
+    } else {
+      console.log('✅ לבוט יש את כל ההרשאות הספציפיות הנדרשות (בלי Administrator).');
+    }
+  }
+
+  // בדיקת מיקום הרול של הבוט מול הרולים החשובים בקונפיג
+  const botHighestPosition = me.roles.highest.position;
+  const rolesToCheck = [
+    ['staffRoleId', config.roles.staffRoleId],
+    ['adminRoleId', config.roles.adminRoleId],
+    ['verifiedRoleId', config.roles.verifiedRoleId],
+    ['mutedRoleId', config.roles.mutedRoleId],
+  ];
+
+  for (const [label, roleId] of rolesToCheck) {
+    if (!roleId || roleId.includes('_ID')) continue;
+    const role = guild.roles.cache.get(roleId);
+    if (role && role.position >= botHighestPosition) {
+      const msg = `⚠️ הרול "${role.name}" (${label}) נמצא מעל או שווה לרול הבוט בהיררכיה — הבוט לא יוכל לתת/להסיר אותו! יש לגרור את רול הבוט למעלה בהגדרות שרת → רולים.`;
+      console.warn(msg);
+      warnLines.push(msg);
+    }
+  }
+
+  // בדיקת קטגוריות (טיקטים + צוות) — האם הבוט בכלל רואה אותן
+  const categoriesToCheck = [
+    ['ticketCategoryId', config.channels.ticketCategoryId],
+    ['staff.categoryId', config.staff.categoryId],
+  ];
+  for (const [label, catId] of categoriesToCheck) {
+    if (!catId || catId.includes('_ID')) continue;
+    const category = await guild.channels.fetch(catId).catch(() => null);
+    if (!category) {
+      const msg = `⚠️ הקטגוריה שהוגדרה עבור ${label} (${catId}) לא נמצאה, או שהבוט לא רואה אותה.`;
+      console.warn(msg);
+      warnLines.push(msg);
+    }
+  }
+
+  if (warnLines.length) {
+    await sendLog(guild, warningEmbed('⚠️ נמצאו בעיות הרשאה/הגדרה בהפעלת הבוט', warnLines.join('\n\n')));
+  }
+}
+
 // ==========================================================================
 // אירועי הבוט
 // ==========================================================================
 
 client.once('ready', async () => {
   console.log(`✅ מחובר בתור ${client.user.tag}`);
+  console.log(`🔗 קישור הזמנה עם הרשאות מלאות (Administrator): https://discord.com/api/oauth2/authorize?client_id=${config.clientId}&permissions=8&scope=bot%20applications.commands`);
   await registerSlashCommands();
+
+  const mainGuild = await client.guilds.fetch(config.guildId).catch(() => null);
+  if (mainGuild) {
+    await checkBotPermissions(mainGuild);
+  } else {
+    console.warn('⚠️ לא נמצא שרת עם guildId שהוגדר בקונפיג — לא בוצעה בדיקת הרשאות.');
+  }
+
   restoreGiveawaysOnStartup();
   await updateBotPresence();
   setInterval(updateBotPresence, 60 * 1000); // עדכון סטטוס כל דקה
