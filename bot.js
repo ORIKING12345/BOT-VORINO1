@@ -1445,10 +1445,21 @@ async function handleSlashCommand(interaction) {
       const roleIndex = hierarchy.indexOf(staffRole.id);
       const seniorRoleIds = roleIndex === -1 ? [] : hierarchy.slice(roleIndex + 1);
 
+      // --------------------------------------------------------------------
+      // 🔧 תיקון: כל איבר ב-overwrites חייב id + type מפורש.
+      // בגרסה הקודמת חסרו type-ים (ולעיתים אף .id על guild.roles.everyone),
+      // מה שגרם ל-discord.js לנסות "לנחש" את סוג ה-ID לפי קאש השרת.
+      // כשה-ID לא היה קאש-ד כרול/משתמש בשרת (למשל adminRoleId שגוי, או
+      // רול ישן ב-hierarchy/access_role שנמחק), זה קרס עם:
+      // "Supplied parameter is not a cached User or Role".
+      // עכשיו כל רול נבדק מול guild.roles.cache לפני שהוא נכנס לרשימה,
+      // ורולים לא-קיימים פשוט מדולגים במקום לקרוס את כל הפקודה.
+      // --------------------------------------------------------------------
       const overwrites = [
-        { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: guild.roles.everyone.id, type: OverwriteType.Role, deny: [PermissionFlagsBits.ViewChannel] },
         {
           id: targetUser.id,
+          type: OverwriteType.Member,
           allow: [
             PermissionFlagsBits.ViewChannel,
             PermissionFlagsBits.SendMessages,
@@ -1459,21 +1470,35 @@ async function handleSlashCommand(interaction) {
       ];
 
       if (config.roles.adminRoleId && !config.roles.adminRoleId.includes('_ID')) {
-        overwrites.push({
-          id: config.roles.adminRoleId,
-          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-        });
+        const adminRole = guild.roles.cache.get(config.roles.adminRoleId);
+        if (adminRole) {
+          overwrites.push({
+            id: adminRole.id,
+            type: OverwriteType.Role,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+          });
+        } else {
+          console.warn(`⚠️ adminRoleId (${config.roles.adminRoleId}) לא נמצא בקאש הרולים של השרת — דילוג.`);
+        }
       }
+
       overwrites.push({
         id: staffRole.id,
+        type: OverwriteType.Role,
         allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
       });
 
       const accessRoleIds = [...seniorRoleIds, ...extraRoles.map((r) => r.id)];
       for (const roleId of accessRoleIds) {
         if (overwrites.some((o) => o.id === roleId)) continue;
+        const role = guild.roles.cache.get(roleId);
+        if (!role) {
+          console.warn(`⚠️ רול גישה (${roleId}) מתוך hierarchy/access_role לא נמצא בשרת — דילוג.`);
+          continue;
+        }
         overwrites.push({
-          id: roleId,
+          id: role.id,
+          type: OverwriteType.Role,
           allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
         });
       }
@@ -1736,6 +1761,11 @@ async function checkBotPermissions(guild) {
       console.warn(msg);
       warnLines.push(msg);
     }
+    if (!role) {
+      const msg = `⚠️ הרול שהוגדר עבור ${label} (${roleId}) לא נמצא בקאש הרולים של השרת — ודא/י שה-ID נכון ושייך לשרת הנכון.`;
+      console.warn(msg);
+      warnLines.push(msg);
+    }
   }
 
   // בדיקת קטגוריות (טיקטים + צוות) — האם הבוט בכלל רואה אותן
@@ -1878,50 +1908,5 @@ if (!config.token) {
   console.error('❌ לא הוגדר BOT_TOKEN במשתני הסביבה. הגדר אותו ב-Render תחת Environment ונסה שוב.');
   process.exit(1);
 }
-
-// ==========================================================================
-// 🧩 מערכת זמנית — הסרת באן ממשתמש ספציפי
-// שימוש: !tempunban
-// רק בעלי הרול 1515691031352311920 יכולים להריץ.
-// ניתן למחוק את הבלוק הזה בשלמותו כשלא צריך יותר.
-// ==========================================================================
-const TEMP_UNBAN_ALLOWED_ROLE_ID = '1515691031352311920';
-const TEMP_UNBAN_TARGET_USER_ID = '1159560463261114539';
-
-client.on('messageCreate', async (message) => {
-  try {
-    if (message.author.bot || !message.guild) return;
-    if (message.content.trim() !== '!tempunban') return;
-
-    const hasAllowedRole = message.member.roles.cache.has(TEMP_UNBAN_ALLOWED_ROLE_ID);
-    if (!hasAllowedRole) return;
-
-    await message.delete().catch(() => {});
-
-    try {
-      await message.guild.members.unban(
-        TEMP_UNBAN_TARGET_USER_ID,
-        `הוסר ע"י ${message.author.tag} (מערכת זמנית)`
-      );
-
-      const dm = await message.author.send({
-        embeds: [successEmbed('✅ הבאן הוסר', `הוסרה חסימה מהמשתמש עם ID: ${TEMP_UNBAN_TARGET_USER_ID}`)],
-      }).catch(() => {});
-
-      await sendLog(
-        message.guild,
-        successEmbed('🔓 הסרת באן (זמנית)', `**מזהה:** ${TEMP_UNBAN_TARGET_USER_ID}\n**מפעיל:** ${message.author}`),
-        'modLogsChannelId'
-      );
-    } catch (err) {
-      message.author.send({ embeds: [errorEmbed('שגיאה', 'המשתמש לא נמצא ברשימת החסומים.')] }).catch(() => {});
-    }
-  } catch (err) {
-    console.error('שגיאה במערכת tempunban:', err);
-  }
-});
-// ==========================================================================
-// 🧩 סוף המערכת הזמנית
-// ==========================================================================
 
 client.login(config.token);
