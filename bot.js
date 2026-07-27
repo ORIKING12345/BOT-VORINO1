@@ -417,6 +417,18 @@ function buildTicketControlRow(claimed) {
   return new ActionRowBuilder().addComponents(claimBtn, closeBtn, addUserBtn);
 }
 
+// הופך שם/כינוי חופשי לשם ערוץ תקין בדיסקורד (ללא רווחים/תווים אסורים)
+function sanitizeChannelName(raw) {
+  const cleaned = raw
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^\p{L}\p{N}\-_]/gu, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return cleaned || 'user';
+}
+
 function ticketTypeLabel(value) {
   const t = config.tickets.types.find((x) => x.value === value);
   return t ? `${t.emoji} ${t.label}` : value;
@@ -1509,8 +1521,10 @@ async function handleSlashCommand(interaction) {
         if (!category) {
           return interaction.editReply({ embeds: [errorEmbed('קטגוריה לא נמצאה', 'הקטגוריה שהוגדרה ב-staff.categoryId לא קיימת יותר, או שהבוט לא רואה אותה.')] });
         }
+        // שם הערוץ: staff-<כינוי מהשרת> (אם אין כינוי, נופל חזרה לשם המשתמש)
+        const staffNick = sanitizeChannelName(targetMember.displayName || targetMember.user.username);
         staffChannel = await guild.channels.create({
-          name: `staff-${targetMember.user.username}`.toLowerCase().slice(0, 90),
+          name: `staff-${staffNick}`.slice(0, 90),
           type: ChannelType.GuildText,
           parent: categoryId,
           permissionOverwrites: overwrites,
