@@ -128,6 +128,20 @@ const config = {
 
   "giveaways": {
     "emoji": "🎉"
+  },
+
+  "staff": {
+    // הקטגוריה שבה ייפתחו החדרים האישיים של חברי הצוות (חובה למלא)
+    "categoryId": "1530932507875479886",
+    // סדר היררכיה של רולי צוות, מהזוטר ביותר לבכיר ביותר.
+    // כל רול שמופיע ברשימה מקבל אוטומטית גישה לחדרים האישיים
+    // של כל הרולים שמופיעים *לפניו* ברשימה (כלומר, בכירים רואים זוטרים).
+    // אפשר להשאיר ריק אם לא רוצים את ההתנהגות הזו.
+    "hierarchy": [
+      // "roleIdZutar",
+      // "roleIdBinoni",
+      // "roleIdBachir"
+    ]
   }
 };
 
@@ -159,8 +173,10 @@ function defaultData() {
   return {
     tickets: {},        // channelId -> { userId, type, claimedBy, claimedMsgId, ticketNumber, createdAt, closed }
     ticketCounter: 0,
+    ticketStatsByType: {}, // type -> count, לעולם לא מתאפס לבד, רק דרך /reset-ticket-stats
     verified: {},        // userId -> true
     giveaways: {},        // messageId -> { channelId, prize, endsAt, winners, hostId, participants: [], ended }
+    staffChannels: {},    // channelId -> { userId, roleId, accessRoles: [], createdAt }
   };
 }
 
@@ -170,7 +186,9 @@ function loadData() {
       fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
       fs.writeFileSync(DATA_PATH, JSON.stringify(defaultData(), null, 2));
     }
-    return JSON.parse(fs.readFileSync(DATA_PATH, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(DATA_PATH, 'utf8'));
+    // מיזוג עם ברירת המחדל כדי לתמוך בקבצי data.json ישנים שנשמרו לפני התוספות
+    return { ...defaultData(), ...parsed };
   } catch (err) {
     console.error('שגיאה בטעינת data.json:', err);
     return defaultData();
@@ -457,7 +475,32 @@ async function createTicketChannel(interaction, typeValue) {
   };
   if (categoryId && !categoryId.includes('_ID')) channelOptions.parent = categoryId;
 
-  const ticketChannel = await guild.channels.create(channelOptions);
+  let ticketChannel;
+  try {
+    // בדיקה מוקדמת: קטגוריה מוגבלת ל-50 ערוצים בדיסקורד
+    if (channelOptions.parent) {
+      const category = await guild.channels.fetch(channelOptions.parent).catch(() => null);
+      if (!category) {
+        db.ticketCounter -= 1; // מבטלים את המונה כדי לא "לשרוף" מספר טיקט על ניסיון כושל
+        return interaction.editReply({
+          embeds: [errorEmbed('קטגוריית טיקטים לא נמצאה', 'הקטגוריה המוגדרת ב-ticketCategoryId לא קיימת יותר או שהבוט לא רואה אותה.')],
+        });
+      }
+      if (category.children.cache.size >= 50) {
+        db.ticketCounter -= 1;
+        return interaction.editReply({
+          embeds: [errorEmbed('הקטגוריה מלאה', 'קטגוריית הטיקטים הגיעה למקסימום 50 ערוצים. יש לפנות ערוצים ישנים או להגדיר קטגוריה נוספת.')],
+        });
+      }
+    }
+    ticketChannel = await guild.channels.create(channelOptions);
+  } catch (err) {
+    console.error('שגיאה ביצירת ערוץ טיקט:', err);
+    db.ticketCounter -= 1;
+    return interaction.editReply({
+      embeds: [errorEmbed('שגיאה בפתיחת הטיקט', 'לא ניתן היה ליצור את ערוץ הטיקט. ודא/י שלבוט יש הרשאת "Manage Channels" בשרת ובקטגוריה שהוגדרה.')],
+    });
+  }
 
   db.tickets[ticketChannel.id] = {
     userId: member.id,
@@ -467,6 +510,7 @@ async function createTicketChannel(interaction, typeValue) {
     createdAt: Date.now(),
     closed: false,
   };
+  db.ticketStatsByType[typeValue] = (db.ticketStatsByType[typeValue] || 0) + 1;
   saveData();
 
   const welcomeEmbed = baseEmbed()
@@ -1053,6 +1097,32 @@ const slashCommands = [
     .addStringOption((o) => o.setName('query').setDescription('שם השחקן או מזהה דיסקורד').setRequired(true)),
 
   new SlashCommandBuilder().setName('server-players').setDescription('מציג רשימת שחקנים מחוברים לשרת ה-FiveM'),
+
+  new SlashCommandBuilder()
+    .setName('addstaff')
+    .setDescription('מוסיף חבר צוות חדש ופותח לו חדר אישי (אדמין בלבד)')
+    .addUserOption((o) => o.setName('user').setDescription('המשתמש להוספה לצוות').setRequired(true))
+    .addRoleOption((o) => o.setName('role').setDescription('הרול שיינתן לחבר הצוות').setRequired(true))
+    .addRoleOption((o) => o.setName('access_role_1').setDescription('רול נוסף עם גישה לחדר (אופציונלי)').setRequired(false))
+    .addRoleOption((o) => o.setName('access_role_2').setDescription('רול נוסף עם גישה לחדר (אופציונלי)').setRequired(false))
+    .addRoleOption((o) => o.setName('access_role_3').setDescription('רול נוסף עם גישה לחדר (אופציונלי)').setRequired(false))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName('removestaff')
+    .setDescription('מסיר חבר צוות ומוחק את החדר האישי שלו (אדמין בלבד)')
+    .addUserOption((o) => o.setName('user').setDescription('המשתמש להסרה מהצוות').setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName('ticket-stats')
+    .setDescription('מציג טבלת סטטיסטיקות טיקטים (מונה שלא מתאפס לבד)')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName('reset-ticket-stats')
+    .setDescription('מאפס ידנית את מונה/טבלת הטיקטים (בלתי הפיך, אדמין בלבד)')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 ].map((c) => c.toJSON());
 
 async function registerSlashCommands() {
@@ -1320,6 +1390,204 @@ async function handleSlashCommand(interaction) {
       await interaction.editReply({
         embeds: [infoEmbed(`👥 שחקנים מחוברים (${status.count}/${status.max})`, list)],
       });
+      break;
+    }
+
+    case 'addstaff': {
+      if (!hasAdminRole(member)) {
+        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק אדמינים יכולים להשתמש בפקודה זו.')], ephemeral: true });
+      }
+
+      const targetUser = options.getUser('user');
+      const staffRole = options.getRole('role');
+      const extraRoles = [1, 2, 3]
+        .map((n) => options.getRole(`access_role_${n}`))
+        .filter(Boolean);
+
+      const categoryId = config.staff.categoryId;
+      if (!categoryId || categoryId.includes('_ID')) {
+        return interaction.reply({
+          embeds: [errorEmbed('לא הוגדרה קטגוריה', 'יש להגדיר קודם את staff.categoryId בקונפיג של הבוט לפני השימוש בפקודה.')],
+          ephemeral: true,
+        });
+      }
+
+      const alreadyExisting = Object.entries(db.staffChannels).find(([, s]) => s.userId === targetUser.id);
+      if (alreadyExisting) {
+        return interaction.reply({
+          embeds: [errorEmbed('כבר קיים חדר', `כבר קיים חדר צוות אישי עבור המשתמש הזה: <#${alreadyExisting[0]}>`)],
+          ephemeral: true,
+        });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+      if (!targetMember) {
+        return interaction.editReply({ embeds: [errorEmbed('שגיאה', 'לא נמצא חבר כזה בשרת.')] });
+      }
+
+      try {
+        await targetMember.roles.add(staffRole);
+      } catch (err) {
+        console.error('שגיאה בהוספת רול צוות:', err);
+        return interaction.editReply({
+          embeds: [errorEmbed('שגיאה בהוספת הרול', 'לבוט אין הרשאה להוסיף את הרול הזה. ודא/י שרול הבוט נמצא מעל הרול הזה בהיררכיה.')],
+        });
+      }
+
+      // גישה אוטומטית לפי היררכיה: רולים שמופיעים ברשימת config.staff.hierarchy
+      // *אחרי* הרול שניתן, מקבלים גישה אוטומטית (כלומר, בכירים רואים חדרים של זוטרים)
+      const hierarchy = config.staff.hierarchy || [];
+      const roleIndex = hierarchy.indexOf(staffRole.id);
+      const seniorRoleIds = roleIndex === -1 ? [] : hierarchy.slice(roleIndex + 1);
+
+      const overwrites = [
+        { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
+        {
+          id: targetUser.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.AttachFiles,
+          ],
+        },
+      ];
+
+      if (config.roles.adminRoleId && !config.roles.adminRoleId.includes('_ID')) {
+        overwrites.push({
+          id: config.roles.adminRoleId,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+        });
+      }
+      overwrites.push({
+        id: staffRole.id,
+        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+      });
+
+      const accessRoleIds = [...seniorRoleIds, ...extraRoles.map((r) => r.id)];
+      for (const roleId of accessRoleIds) {
+        if (overwrites.some((o) => o.id === roleId)) continue;
+        overwrites.push({
+          id: roleId,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+        });
+      }
+
+      let staffChannel;
+      try {
+        const category = await guild.channels.fetch(categoryId).catch(() => null);
+        if (!category) {
+          return interaction.editReply({ embeds: [errorEmbed('קטגוריה לא נמצאה', 'הקטגוריה שהוגדרה ב-staff.categoryId לא קיימת יותר, או שהבוט לא רואה אותה.')] });
+        }
+        staffChannel = await guild.channels.create({
+          name: `staff-${targetMember.user.username}`.toLowerCase().slice(0, 90),
+          type: ChannelType.GuildText,
+          parent: categoryId,
+          permissionOverwrites: overwrites,
+          topic: `חדר אישי לחבר צוות | ${targetUser.id} | רול: ${staffRole.name}`,
+        });
+      } catch (err) {
+        console.error('שגיאה ביצירת חדר צוות:', err);
+        return interaction.editReply({
+          embeds: [errorEmbed('שגיאה ביצירת החדר', 'ייתכן שהקטגוריה מלאה (מקסימום 50 ערוצים) או שלבוט אין הרשאות מספיקות בקטגוריה זו.')],
+        });
+      }
+
+      db.staffChannels[staffChannel.id] = {
+        userId: targetUser.id,
+        roleId: staffRole.id,
+        accessRoles: [staffRole.id, ...accessRoleIds],
+        createdAt: Date.now(),
+      };
+      saveData();
+
+      const welcomeEmbed = successEmbed(
+        '💙 ברוך/ה הבא/ה לצוות!',
+        [
+          `שלום ${targetMember} 👋`,
+          '',
+          `נוספת לצוות עם הרול ${staffRole}.`,
+          'זהו החדר האישי שלך — כאן תוכל/י לתקשר עם שאר הצוות ולקבל עדכונים אישיים.',
+        ].join('\n')
+      );
+      await staffChannel.send({ content: `${targetMember}`, embeds: [welcomeEmbed] });
+
+      await interaction.editReply({
+        embeds: [successEmbed('✅ חבר צוות נוסף בהצלחה', `${targetMember} נוסף/ה לצוות עם הרול ${staffRole}.\nהחדר האישי: ${staffChannel}`)],
+      });
+
+      await sendLog(
+        guild,
+        infoEmbed('👥 חבר צוות חדש', `**משתמש:** ${targetMember}\n**רול:** ${staffRole}\n**חדר:** ${staffChannel}\n**נוסף על ידי:** ${interaction.user}`)
+      );
+      break;
+    }
+
+    case 'removestaff': {
+      if (!hasAdminRole(member)) {
+        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק אדמינים יכולים להשתמש בפקודה זו.')], ephemeral: true });
+      }
+      const targetUser = options.getUser('user');
+      const entry = Object.entries(db.staffChannels).find(([, s]) => s.userId === targetUser.id);
+      if (!entry) {
+        return interaction.reply({ embeds: [errorEmbed('לא נמצא', 'לא נמצא חדר צוות פעיל למשתמש הזה.')], ephemeral: true });
+      }
+      const [channelId, staffData] = entry;
+
+      await interaction.reply({ embeds: [infoEmbed('🗑️ מסיר מהצוות...', 'החדר יימחק בעוד 5 שניות.')], ephemeral: true });
+
+      const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+      if (targetMember && staffData.roleId) {
+        await targetMember.roles.remove(staffData.roleId).catch(() => {});
+      }
+
+      const channel = await guild.channels.fetch(channelId).catch(() => null);
+      if (channel) setTimeout(() => channel.delete().catch(() => {}), 5000);
+
+      delete db.staffChannels[channelId];
+      saveData();
+
+      await sendLog(guild, warningEmbed('👥 חבר צוות הוסר', `**משתמש:** <@${targetUser.id}>\n**הוסר על ידי:** ${interaction.user}`));
+      break;
+    }
+
+    case 'ticket-stats': {
+      if (!hasStaffRole(member)) {
+        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק צוות יכול לצפות בסטטיסטיקות.')], ephemeral: true });
+      }
+      const openCount = Object.values(db.tickets).filter((t) => !t.closed).length;
+      const typeLines =
+        Object.entries(db.ticketStatsByType)
+          .map(([type, count]) => `${ticketTypeLabel(type)}: **${count}**`)
+          .join('\n') || 'אין נתונים עדיין';
+
+      const e = infoEmbed(
+        '📊 סטטיסטיקת טיקטים',
+        [
+          `**סה"כ טיקטים שנפתחו אי-פעם:** ${db.ticketCounter}`,
+          `**טיקטים פתוחים כרגע:** ${openCount}`,
+          '',
+          '**לפי סוג:**',
+          typeLines,
+          '',
+          '_המונה הזה לא מתאפס לבד — הוא נשמר עד לשימוש בפקודה /reset-ticket-stats_',
+        ].join('\n')
+      );
+      await interaction.reply({ embeds: [e] });
+      break;
+    }
+
+    case 'reset-ticket-stats': {
+      if (!hasAdminRole(member)) {
+        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק אדמינים יכולים לאפס את הסטטיסטיקות.')], ephemeral: true });
+      }
+      db.ticketCounter = 0;
+      db.ticketStatsByType = {};
+      saveData();
+      await interaction.reply({ embeds: [successEmbed('🔄 הסטטיסטיקות אופסו', 'מונה הטיקטים וטבלת הסטטיסטיקות אופסו בהצלחה.')] });
+      await sendLog(guild, warningEmbed('🔄 איפוס סטטיסטיקות טיקטים', `**אופס על ידי:** ${interaction.user}`));
       break;
     }
   }
