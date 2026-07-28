@@ -121,7 +121,7 @@ const config = {
   },
 
   "fivem": {
-    "ip": "191.96.229.83",
+    "ip": "178.208.177.182",
     "port": "30120",
     "connectLink": "fivem://connect/play.yourserver.com",
     "storeLink": "https://yourstore.tebex.io"
