@@ -11,6 +11,10 @@
  *   5. מערכת לוגים מלאה (באנים, טיימאאוטים, קיקים, כניסה/יציאה, אימות)
  *   6. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
  *   7. סטטוס בוט דינמי לפי כמות משתמשים בשרת ה-FiveM
+ *
+ *  🔧 עדכון אחרון: תוקנה שליפת סטטוס ה-FiveM — כעת נשלף דרך ה-API הרשמי
+ *  של cfx.re (לפי קוד ה-join), עם גיבוי לשאילתה ישירה מול IP:PORT ורישום
+ *  שגיאות אמיתי ללוג, כדי שסטטוס "אופליין" לא יוצג בטעות כששרת בעצם אונליין.
  * ==========================================================================
  */
 
@@ -123,10 +127,9 @@ const config = {
   "fivem": {
     "ip": "191.96.229.83",
     "port": "30120",
-    // חייב להיות קישור אמיתי (URL) שמתחיל ב-http:// או https:// כדי שכפתור ה-Link בדיסקורד יעבוד.
-    // "connect ip:port" זו פקודת קונסולה בתוך המשחק, לא URL - הכפתור לא יתקבל עם זה.
-    // אם יש לך קוד הצטרפות מ-cfx.re, זה הפורמט הנכון:
-    "connectLink": "https://cfx.re/join/dmzj5d",
+    // חייב להיות קישור אמיתי (URL) שמתחיל ב-http:// או https:// כדי שכפתור ה-Link בדיסקורד יעבוד,
+    // וגם כדי שנוכל לחלץ ממנו את קוד ה-join לשליפה דרך ה-API הרשמי של cfx.re.
+    "connectLink": "https://cfx.re/join/rmmg7ej",
     // אופציונלי - אם אין חנות, השאירו מחרוזת ריקה ("") והכפתור פשוט לא יופיע.
     "storeLink": ""
   },
@@ -299,31 +302,81 @@ async function sendLog(guild, embed, key = 'logsChannelId') {
 // --------------------------------------------------------------------------
 // FiveM - סטטוס שרת + חיפוש שחקן
 // --------------------------------------------------------------------------
+// 🔧 תיקון: הרבה אחסונים ל-FiveM חוסמים גישה חיצונית ישירה לפורט המשחק
+// (הגנת אנטי-DDoS / פיירוול), מה שגרם לסטטוס "אופליין" גם כששרת פעיל
+// לגמרי — וזה נכשל בשקט כי השגיאה האמיתית לא נרשמה בשום מקום.
+//
+// עכשיו השליפה קודם מנסה את ה-API הרשמי של cfx.re (אותו API שמפעיל את
+// כפתור ה-Connect ורשימת השרתים במשחק), לפי קוד ה-join מתוך connectLink.
+// זהו HTTPS רגיל בפורט 443 ולכן לא תלוי בחסימות של פורט המשחק.
+// אם זה נכשל מכל סיבה, יש גיבוי לשאילתה הישנה הישירה מול IP:PORT.
+// כל כשל נרשם ל-console כדי שאפשר יהיה לראות ברנדר (Render) מה קרה בפועל.
+// --------------------------------------------------------------------------
+
+function extractJoinId(link) {
+  if (!link) return null;
+  const match = /cfx\.re\/join\/([a-zA-Z0-9]+)/i.exec(link);
+  return match ? match[1] : null;
+}
+
+async function fetchFiveMViaMasterAPI() {
+  const joinId = extractJoinId(config.fivem.connectLink);
+  if (!joinId) throw new Error('אין קוד cfx.re תקין ב-connectLink');
+  const url = `https://servers-frontend.fivem.net/api/servers/single/${joinId}`;
+  const res = await axios.get(url, { timeout: 6000 });
+  const data = res.data && res.data.Data;
+  if (!data) throw new Error('לא התקבל מידע מה-API הרשמי של FiveM (ייתכן שהשרת לא רשום ברשימת cfx.re)');
+  const players = data.players || [];
+  return {
+    online: true,
+    players,
+    count: typeof data.clients === 'number' ? data.clients : players.length,
+    max:
+      parseInt(data.sv_maxclients, 10) ||
+      parseInt(data.vars && data.vars.sv_maxclients, 10) ||
+      players.length,
+    hostname: data.hostname || (data.vars && data.vars.sv_projectName) || 'FiveM Server',
+  };
+}
+
 async function fetchFiveMPlayers() {
   const url = `http://${config.fivem.ip}:${config.fivem.port}/players.json`;
-  const res = await axios.get(url, { timeout: 4000 });
+  const res = await axios.get(url, { timeout: 5000 });
   return res.data; // array of players
 }
 
 async function fetchFiveMInfo() {
   const url = `http://${config.fivem.ip}:${config.fivem.port}/info.json`;
-  const res = await axios.get(url, { timeout: 4000 });
+  const res = await axios.get(url, { timeout: 5000 });
   return res.data;
 }
 
+async function fetchFiveMViaDirectIP() {
+  const [players, info] = await Promise.all([fetchFiveMPlayers(), fetchFiveMInfo()]);
+  const maxPlayers =
+    (info.vars && (info.vars.sv_maxclients || info.vars['sv_maxClients'])) || players.length;
+  return {
+    online: true,
+    players,
+    count: players.length,
+    max: parseInt(maxPlayers, 10) || players.length,
+    hostname: (info.vars && info.vars.sv_projectName) || info.serverversion || 'FiveM Server',
+  };
+}
+
 async function getFiveMStatus() {
+  // ניסיון ראשון: ה-API הרשמי של FiveM (עובד גם אם השרת חוסם גישה ישירה ל-IP:port)
   try {
-    const [players, info] = await Promise.all([fetchFiveMPlayers(), fetchFiveMInfo()]);
-    const maxPlayers =
-      (info.vars && (info.vars.sv_maxclients || info.vars['sv_maxClients'])) || players.length;
-    return {
-      online: true,
-      players,
-      count: players.length,
-      max: parseInt(maxPlayers, 10) || players.length,
-      hostname: (info.vars && info.vars.sv_projectName) || info.serverversion || 'FiveM Server',
-    };
+    return await fetchFiveMViaMasterAPI();
   } catch (err) {
+    console.warn('⚠️ נכשל שליפת סטטוס FiveM דרך API הרשמי (cfx.re):', err.message);
+  }
+
+  // ניסיון שני (גיבוי): שאילתה ישירה מול players.json / info.json
+  try {
+    return await fetchFiveMViaDirectIP();
+  } catch (err) {
+    console.warn('⚠️ נכשל שליפת סטטוס FiveM ישירות מה-IP:', err.message);
     return { online: false };
   }
 }
@@ -393,12 +446,16 @@ function buildServerStatusEmbed(status) {
 }
 
 function buildServerStatusRow() {
-  const connectRow = new ActionRowBuilder().addComponents(
+  const components = [
     new ButtonBuilder().setLabel('🚀 הצטרפות מהירה').setStyle(ButtonStyle.Link).setURL(config.fivem.connectLink),
-    new ButtonBuilder().setLabel('🛒 חנות השרת').setStyle(ButtonStyle.Link).setURL(config.fivem.storeLink),
+  ];
+  if (config.fivem.storeLink) {
+    components.push(new ButtonBuilder().setLabel('🛒 חנות השרת').setStyle(ButtonStyle.Link).setURL(config.fivem.storeLink));
+  }
+  components.push(
     new ButtonBuilder().setCustomId('server_status_refresh').setLabel('רענון').setEmoji('🔄').setStyle(ButtonStyle.Secondary)
   );
-  return connectRow;
+  return new ActionRowBuilder().addComponents(components);
 }
 
 async function handleServerStatusRefresh(interaction) {
