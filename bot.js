@@ -123,8 +123,12 @@ const config = {
   "fivem": {
     "ip": "191.96.229.83",
     "port": "30120",
-    "connectLink": "connect cfx.re/join/dmzj5d",
-    "storeLink":
+    // חייב להיות קישור אמיתי (URL) שמתחיל ב-http:// או https:// כדי שכפתור ה-Link בדיסקורד יעבוד.
+    // "connect ip:port" זו פקודת קונסולה בתוך המשחק, לא URL - הכפתור לא יתקבל עם זה.
+    // אם יש לך קוד הצטרפות מ-cfx.re, זה הפורמט הנכון:
+    "connectLink": "https://cfx.re/join/dmzj5d",
+    // אופציונלי - אם אין חנות, השאירו מחרוזת ריקה ("") והכפתור פשוט לא יופיע.
+    "storeLink": ""
   },
 
   "giveaways": {
