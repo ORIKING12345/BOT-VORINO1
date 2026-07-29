@@ -181,7 +181,6 @@ function defaultData() {
   return {
     tickets: {},        // channelId -> { userId, type, claimedBy, claimedMsgId, ticketNumber, createdAt, closed }
     ticketCounter: 0,
-    ticketStatsByType: {}, // type -> count, לעולם לא מתאפס לבד, רק דרך /reset-ticket-stats
     verified: {},        // userId -> true
     giveaways: {},        // messageId -> { channelId, prize, endsAt, winners, hostId, participants: [], ended }
     staffChannels: {},    // channelId -> { userId, roleId, accessRoles: [], createdAt }
@@ -638,7 +637,6 @@ async function createTicketChannel(interaction, typeValue) {
     createdAt: Date.now(),
     closed: false,
   };
-  db.ticketStatsByType[typeValue] = (db.ticketStatsByType[typeValue] || 0) + 1;
   saveData();
 
   const welcomeEmbed = baseEmbed()
@@ -1297,16 +1295,6 @@ const slashCommands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
-    .setName('ticket-stats')
-    .setDescription('מציג טבלת סטטיסטיקות טיקטים (מונה שלא מתאפס לבד)')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-
-  new SlashCommandBuilder()
-    .setName('reset-ticket-stats')
-    .setDescription('מאפס ידנית את מונה/טבלת הטיקטים (בלתי הפיך, אדמין בלבד)')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
     .setName('leaderboard')
     .setDescription('מציג את לוח המובילים של לקיחות הטיקטים')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
@@ -1345,11 +1333,38 @@ const slashCommands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 ].map((c) => c.toJSON());
 
+// --------------------------------------------------------------------------
+// רישום פקודות סלאש — סנכרון מלא מול דיסקורד
+// --------------------------------------------------------------------------
+// שימוש ב-PUT (ולא POST) הוא קריטי: PUT מחליף את *כל* רשימת הפקודות
+// הרשומות בגילדה בבת אחת ברשימה שאנחנו שולחים כאן. המשמעות היא שכל
+// פקודה שהייתה רשומה בדיסקורד בעבר (למשל /ticket-stats או
+// /reset-ticket-stats) אך כבר לא מופיעה במערך slashCommands למעלה —
+// תימחק אוטומטית על ידי דיסקורד עצמו, בלי שצריך לעשות שום דבר ידני.
+// כדי לוודא בבירור מה קרה בכל עלייה, אנחנו משווים בין הפקודות שהיו
+// רשומות קודם לבין מה ש-PUT מחזיר, ומדפיסים בדיוק אילו פקודות נוספו
+// ואילו הוסרו.
+// --------------------------------------------------------------------------
 async function registerSlashCommands() {
   const rest = new REST({ version: '10' }).setToken(config.token);
   try {
-    await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), { body: slashCommands });
-    console.log('✅ פקודות הסלאש נרשמו בהצלחה.');
+    const existing = await rest
+      .get(Routes.applicationGuildCommands(config.clientId, config.guildId))
+      .catch(() => []);
+    const existingNames = new Set((existing || []).map((c) => c.name));
+    const newNames = new Set(slashCommands.map((c) => c.name));
+
+    const added = [...newNames].filter((n) => !existingNames.has(n));
+    const removed = [...existingNames].filter((n) => !newNames.has(n));
+
+    const result = await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), {
+      body: slashCommands,
+    });
+
+    console.log(`✅ פקודות הסלאש סונכרנו בהצלחה. סה"כ פקודות פעילות: ${result.length}`);
+    if (added.length) console.log(`   ➕ נוספו: ${added.join(', ')}`);
+    if (removed.length) console.log(`   ➖ הוסרו (לא קיימות יותר בקוד): ${removed.join(', ')}`);
+    if (!added.length && !removed.length) console.log('   ↔️ אין שינוי ברשימת הפקודות מאז העלייה הקודמת.');
   } catch (err) {
     console.error('❌ שגיאה ברישום פקודות סלאש:', err);
   }
@@ -1804,44 +1819,6 @@ async function handleSlashCommand(interaction) {
       saveData();
 
       await sendLog(guild, warningEmbed('👥 חבר צוות הוסר', `**משתמש:** <@${targetUser.id}>\n**הוסר על ידי:** ${interaction.user}`));
-      break;
-    }
-
-    case 'ticket-stats': {
-      if (!hasStaffRole(member)) {
-        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק צוות יכול לצפות בסטטיסטיקות.')], ephemeral: true });
-      }
-      const openCount = Object.values(db.tickets).filter((t) => !t.closed).length;
-      const typeLines =
-        Object.entries(db.ticketStatsByType)
-          .map(([type, count]) => `${ticketTypeLabel(type)}: **${count}**`)
-          .join('\n') || 'אין נתונים עדיין';
-
-      const e = infoEmbed(
-        '📊 סטטיסטיקת טיקטים',
-        [
-          `**סה"כ טיקטים שנפתחו אי-פעם:** ${db.ticketCounter}`,
-          `**טיקטים פתוחים כרגע:** ${openCount}`,
-          '',
-          '**לפי סוג:**',
-          typeLines,
-          '',
-          '_המונה הזה לא מתאפס לבד — הוא נשמר עד לשימוש בפקודה /reset-ticket-stats_',
-        ].join('\n')
-      );
-      await interaction.reply({ embeds: [e] });
-      break;
-    }
-
-    case 'reset-ticket-stats': {
-      if (!hasAdminRole(member)) {
-        return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק אדמינים יכולים לאפס את הסטטיסטיקות.')], ephemeral: true });
-      }
-      db.ticketCounter = 0;
-      db.ticketStatsByType = {};
-      saveData();
-      await interaction.reply({ embeds: [successEmbed('🔄 הסטטיסטיקות אופסו', 'מונה הטיקטים וטבלת הסטטיסטיקות אופסו בהצלחה.')] });
-      await sendLog(guild, warningEmbed('🔄 איפוס סטטיסטיקות טיקטים', `**אופס על ידי:** ${interaction.user}`));
       break;
     }
 
