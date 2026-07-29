@@ -1,13 +1,13 @@
 /**
  * ==========================================================================
- *  VORINO BOT — בוט דיסקורד מקצועי בסגנון כחול
+ *  VORINO BOT — בוט דיסקורד מקצועי בסגנון כתום זוהר
  * ==========================================================================
  *  מערכות כלולות:
  *   1. מערכת טיקטים משוכללת (בחירת סוג טיקט, פאנל שליטה, לקיחת טיקט + הודעה
  *      נבחרת, סגירה עם טרנסקריפט)
  *   2. מערכת אימות בכפתור (רול מיידי)
  *   3. מערכת הגרלות (כפתור כניסה, ספירת משתתפים, בחירת זוכים אוטומטית)
- *   4. מערכת סטטוס שרת FiveM (!status) + חיפוש שחקן (/player-info)
+ *   4. מערכת סטטוס שרת FiveM (/server-status) + חיפוש שחקן (/player-info)
  *   5. מערכת לוגים מלאה (באנים, טיימאאוטים, קיקים, כניסה/יציאה, אימות)
  *   6. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
  *   7. סטטוס בוט דינמי לפי כמות משתמשים בשרת ה-FiveM
@@ -69,12 +69,12 @@ const config = {
   "prefix": "!",
 
   "colors": {
-    "primary": "#3498DB",
-    "dark": "#2C3E50",
+    "primary": "#FF7A00",
+    "dark": "#7A3B00",
     "success": "#2ECC71",
     "danger": "#E74C3C",
     "warning": "#F39C12",
-    "info": "#5DADE2"
+    "info": "#FFA733"
   },
 
   "roles": {
@@ -98,7 +98,7 @@ const config = {
   "welcome": {
     "bannerImage": "https://i.imgur.com/6YbQ0dJ.png",
     "messages": [
-      "נחתת בשרת הכי כחול שיש 💙",
+      "נחתת בשרת הכי כתום שיש 🧡",
       "שמחים שהצטרפת אלינו!",
       "עוד חבר/ה מגניב/ה לקהילה 🎉"
     ]
@@ -209,7 +209,7 @@ function saveData() {
 let db = loadData();
 
 // --------------------------------------------------------------------------
-// עזרים כלליים - עיצוב כחול אחיד
+// עזרים כלליים - עיצוב כתום אחיד
 // --------------------------------------------------------------------------
 const COLORS = config.colors;
 
@@ -348,9 +348,59 @@ async function updateBotPresence() {
     return;
   }
   client.user.setPresence({
-    activities: [{ name: `${status.count}/${status.max} שחקנים באונליין 🔵`, type: ActivityType.Watching }],
+    activities: [{ name: `${status.count}/${status.max} שחקנים באונליין 🟧`, type: ActivityType.Watching }],
     status: 'online',
   });
+}
+
+// --------------------------------------------------------------------------
+// עיצוב פאנל סטטוס שרת FiveM — עם פס התקדמות ויזואלי לכמות השחקנים
+// --------------------------------------------------------------------------
+function buildPlayerProgressBar(count, max, length = 14) {
+  const safeMax = max > 0 ? max : Math.max(count, 1);
+  const ratio = Math.min(count / safeMax, 1);
+  const filled = Math.round(ratio * length);
+  const empty = length - filled;
+  return '🟧'.repeat(filled) + '⬛'.repeat(empty);
+}
+
+function buildServerStatusEmbed(status) {
+  if (!status.online) {
+    return baseEmbed()
+      .setColor(COLORS.danger)
+      .setTitle('🔴 השרת לא מחובר')
+      .setDescription('לא ניתן להתחבר כרגע לשרת ה-FiveM. ייתכן שהשרת בפעולות תחזוקה או כבוי זמנית.')
+      .addFields({ name: '📶 סטטוס', value: 'Offline ❌', inline: true });
+  }
+
+  const bar = buildPlayerProgressBar(status.count, status.max);
+  const percent = status.max > 0 ? Math.round((status.count / status.max) * 100) : 0;
+
+  return baseEmbed()
+    .setColor(COLORS.primary)
+    .setTitle(`🟢 ${status.hostname}`)
+    .setDescription('השרת פעיל ומחובר! 🧡')
+    .addFields(
+      { name: '👥 שחקנים מחוברים', value: `**${status.count} / ${status.max}** (${percent}%)`, inline: false },
+      { name: '📊 תפוסה', value: bar, inline: false },
+      { name: '📶 סטטוס', value: 'Online ✅', inline: true },
+      { name: '🌐 כתובת', value: `\`${config.fivem.ip}:${config.fivem.port}\``, inline: true }
+    );
+}
+
+function buildServerStatusRow() {
+  const connectRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setLabel('🚀 הצטרפות מהירה').setStyle(ButtonStyle.Link).setURL(config.fivem.connectLink),
+    new ButtonBuilder().setLabel('🛒 חנות השרת').setStyle(ButtonStyle.Link).setURL(config.fivem.storeLink),
+    new ButtonBuilder().setCustomId('server_status_refresh').setLabel('רענון').setEmoji('🔄').setStyle(ButtonStyle.Secondary)
+  );
+  return connectRow;
+}
+
+async function handleServerStatusRefresh(interaction) {
+  await interaction.deferUpdate();
+  const status = await getFiveMStatus();
+  await interaction.editReply({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
 }
 
 // ==========================================================================
@@ -365,7 +415,7 @@ function buildTicketPanelEmbed() {
         'ברוכים הבאים למערכת התמיכה שלנו!',
         '',
         'בחר/י את הנושא המתאים מהתפריט למטה כדי לפתוח טיקט חדש.',
-        'צוות התמיכה שלנו יטפל בפנייתך בהקדם האפשרי 💙',
+        'צוות התמיכה שלנו יטפל בפנייתך בהקדם האפשרי 🧡',
         '',
         '**חוקי פתיחת טיקט:**',
         '• יש לפתוח טיקט אחד בלבד לכל נושא',
@@ -723,7 +773,7 @@ function buildWelcomeEmbed(member) {
 
   return baseEmbed()
     .setColor(COLORS.primary)
-    .setTitle('💙 חבר/ה חדש/ה הצטרף/ה!')
+    .setTitle('🧡 חבר/ה חדש/ה הצטרף/ה!')
     .setDescription(
       [
         `ברוך/ה הבא/ה ${member} ל **${member.guild.name}**!`,
@@ -760,7 +810,7 @@ function buildVerifyPanelEmbed() {
       [
         'כדי לקבל גישה מלאה לשרת, יש ללחוץ על הכפתור למטה.',
         '',
-        'לאחר האימות תקבל/י גישה לכלל הערוצים והרול המתאים באופן מיידי 💙',
+        'לאחר האימות תקבל/י גישה לכלל הערוצים והרול המתאים באופן מיידי 🧡',
         '',
         '**שימו לב:** יש לעמוד בחוקי השרת בכל עת.',
       ].join('\n')
@@ -832,7 +882,7 @@ function buildGiveawayEmbed(g, ended = false) {
       }
     );
   if (ended) e.setDescription('🔒 ההגרלה הסתיימה! לחצו על הכפתור למטה כדי לראות את הזוכים.');
-  else e.setDescription('לחצו על הכפתור למטה כדי להצטרף להגרלה! בהצלחה 💙');
+  else e.setDescription('לחצו על הכפתור למטה כדי להצטרף להגרלה! בהצלחה 🧡');
   return e;
 }
 
@@ -1159,6 +1209,10 @@ const slashCommands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
+    .setName('server-status')
+    .setDescription('מציג פאנל סטטוס שרת FiveM עם פס תפוסה וכפתורי חיבור'),
+
+  new SlashCommandBuilder()
     .setName('player-info')
     .setDescription('מחפש שחקן מחובר בשרת ה-FiveM')
     .addStringOption((o) => o.setName('query').setDescription('שם השחקן או מזהה דיסקורד').setRequired(true)),
@@ -1458,6 +1512,13 @@ async function handleSlashCommand(interaction) {
       break;
     }
 
+    case 'server-status': {
+      await interaction.deferReply();
+      const status = await getFiveMStatus();
+      await interaction.editReply({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
+      break;
+    }
+
     case 'player-info': {
       const query = options.getString('query');
       await interaction.deferReply();
@@ -1636,7 +1697,7 @@ async function handleSlashCommand(interaction) {
       saveData();
 
       const welcomeEmbed = successEmbed(
-        '💙 ברוך/ה הבא/ה לצוות!',
+        '🧡 ברוך/ה הבא/ה לצוות!',
         [
           `שלום ${targetMember} 👋`,
           '',
@@ -1843,15 +1904,15 @@ async function handleSlashCommand(interaction) {
 }
 
 // ==========================================================================
-// פקודות פרפיקס (!) — פאנלים וסטטוס בלבד
+// פקודות פרפיקס (!) — פאנלים בלבד
 // ==========================================================================
 async function handlePrefixCommand(message) {
   if (!message.content.startsWith(config.prefix)) return;
   const args = message.content.slice(config.prefix.length).trim().split(/\s+/);
   const cmd = args.shift().toLowerCase();
 
-  // כל פקודות ה-! דורשות הרשאת צוות (למעט status שפתוח לכולם)
-  if (cmd !== 'status' && !hasStaffRole(message.member)) return;
+  // כל פקודות ה-! דורשות הרשאת צוות
+  if (!hasStaffRole(message.member)) return;
 
   switch (cmd) {
     case 'ticketpanel': {
@@ -1881,41 +1942,6 @@ async function handlePrefixCommand(message) {
       }
       await startGiveaway(message.channel, message.author.id, prize, durationMs, winnersCount);
       await message.delete().catch(() => {});
-      break;
-    }
-
-    case 'status': {
-      const statusMsg = await message.reply({ embeds: [infoEmbed('🔄 בודק סטטוס שרת...', 'אנא המתן/י רגע')] });
-      const status = await getFiveMStatus();
-
-      if (!status.online) {
-        await statusMsg.edit({
-          embeds: [
-            errorEmbed('🔴 Server Offline', 'לא ניתן להתחבר כרגע לשרת ה-FiveM.').addFields({
-              name: 'סטטוס',
-              value: 'Server Offline ❌',
-            }),
-          ],
-          components: [],
-        });
-        break;
-      }
-
-      const connectRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setLabel('🚀 הצטרפות מהירה').setStyle(ButtonStyle.Link).setURL(config.fivem.connectLink),
-        new ButtonBuilder().setLabel('🛒 חנות השרת').setStyle(ButtonStyle.Link).setURL(config.fivem.storeLink)
-      );
-
-      const e = baseEmbed()
-        .setTitle(`🟢 ${status.hostname}`)
-        .setDescription('השרת פעיל ומחובר!')
-        .addFields(
-          { name: '👥 שחקנים', value: `${status.count}/${status.max}`, inline: true },
-          { name: '📶 סטטוס', value: 'Online ✅', inline: true }
-        )
-        .setColor(COLORS.success);
-
-      await statusMsg.edit({ embeds: [e], components: [connectRow] });
       break;
     }
   }
@@ -2028,7 +2054,7 @@ client.once('ready', async () => {
   restoreGiveawaysOnStartup();
   await updateBotPresence();
   setInterval(updateBotPresence, 60 * 1000); // עדכון סטטוס כל דקה
-  console.log('💙 Vorino Bot מוכן לפעולה!');
+  console.log('🧡 Vorino Bot מוכן לפעולה!');
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -2044,6 +2070,7 @@ client.on('interactionCreate', async (interaction) => {
       if (id === 'ticket_claim') return handleTicketClaimButton(interaction);
       if (id === 'ticket_close') return handleTicketClose(interaction);
       if (id === 'ticket_transcript') return handleTicketTranscript(interaction);
+      if (id === 'server_status_refresh') return handleServerStatusRefresh(interaction);
       if (id.startsWith('giveaway_enter_')) return handleGiveawayEnter(interaction, id.replace('giveaway_enter_', ''));
       return;
     }
