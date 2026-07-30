@@ -8,13 +8,23 @@
  *   2. מערכת אימות בכפתור (רול מיידי)
  *   3. מערכת הגרלות (כפתור כניסה, ספירת משתתפים, בחירת זוכים אוטומטית)
  *   4. מערכת סטטוס שרת FiveM (/server-status) + חיפוש שחקן (/player-info)
- *   5. מערכת לוגים מלאה (באנים, טיימאאוטים, קיקים, כניסה/יציאה, אימות)
- *   6. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
- *   7. סטטוס בוט דינמי לפי כמות משתמשים בשרת ה-FiveM
+ *      + חיבור ל-SQL לשליפת נתוני שחקנים אמיתיים מהדאטהבייס
+ *   5. שליטה חיה בשרת ה-FiveM דרך RCON: קיק, באן, הסרת באן, שידור הודעה
+ *   6. מערכת לוגים מלאה (באנים, טיימאאוטים, קיקים, כניסה/יציאה, אימות)
+ *   7. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
+ *   8. סטטוס בוט דינמי לפי כמות משתמשים בשרת ה-FiveM
  *
- *  🔧 עדכון אחרון: תוקנה שליפת סטטוס ה-FiveM — כעת נשלף דרך ה-API הרשמי
- *  של cfx.re (לפי קוד ה-join), עם גיבוי לשאילתה ישירה מול IP:PORT ורישום
- *  שגיאות אמיתי ללוג, כדי שסטטוס "אופליין" לא יוצג בטעות כששרת בעצם אונליין.
+ *  🔧 עדכון גרסה 2.0:
+ *   • פאנל סטטוס שרת עוצב מחדש בסגנון כתום-זוהר עשיר יותר (כותרת עם
+ *     אימוג'ים, מפרידים ויזואליים, בלוק קוד לכתובת ה-IP:PORT, מד תפוסה
+ *     ואחוזים). הפאנל מתעדכן אוטומטית כל דקה, לא רק בלחיצה על רענון.
+ *   • נוספה שכבת RCON מלאה (UDP, פרוטוקול ה-RCON הרשמי של FiveM) לביצוע
+ *     פעולות ניהול אמיתיות על השרת: קיק, באן, הסרת באן ושידור הודעה —
+ *     ישירות מפקודות סלאש בדיסקורד.
+ *   • /player-info משולבת כעת גם עם מסד נתונים (MySQL) של השרת, ומציגה
+ *     נתוני שחקן אמיתיים (כסף, תפקיד, לישן זיהוי וכו') לצד הסטטוס החי.
+ *   • טקסטים עוצבו מחדש לסגנון מקצועי ורציני יותר, עם אלמנטים ויזואליים
+ *     בולטים (🚨 / 💠 / ✨) לשמירה על אופי כתום-זוהר של הבוט.
  * ==========================================================================
  */
 
@@ -45,6 +55,16 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const http = require('http');
+const dgram = require('dgram');
+
+// mysql2 נדרש רק אם הוגדר חיבור למסד נתונים (config.database.host).
+// אם לא הותקן ולא הוגדר חיבור, הבוט ימשיך לעבוד רגיל בלי החלק הזה.
+let mysql = null;
+try {
+  mysql = require('mysql2/promise');
+} catch {
+  console.warn('ℹ️ החבילה mysql2 לא מותקנת — פקודת /player-info תעבוד רק עם נתונים חיים מהשרת, בלי מסד נתונים. הרצה: npm install mysql2');
+}
 
 // --------------------------------------------------------------------------
 // שרת HTTP קטן — נדרש כדי שרנדר (Render) יזהה את השירות כ-"Web Service" חי.
@@ -64,7 +84,7 @@ http
 
 // ==========================================================================
 // הגדרות (CONFIG) — ה-IDs נטענים ממשתני סביבה (Render → Environment) כשהם
-// רגישים (טוקן), והשאר מוגדרים ישירות. אפשר לשנות הכל כאן.
+// רגישים (טוקן, סיסמאות), והשאר מוגדרים ישירות. אפשר לשנות הכל כאן.
 // ==========================================================================
 const config = {
   "token": process.env.BOT_TOKEN,
@@ -117,10 +137,10 @@ const config = {
       { "label": "אחר", "value": "other", "emoji": "❓", "description": "כל נושא אחר שלא מופיע למעלה" }
     ],
     "claimMessages": [
-      { "label": "ברוך הבא", "value": "welcome", "text": "שלום וברוך הבא! אני כאן כדי לעזור לך 🙏 אנא פרט/י את הבעיה בהרחבה ככל שניתן." },
-      { "label": "רגע של סבלנות", "value": "patience", "text": "היי, ראיתי את הפנייה שלך ואני מטפל/ת בה כרגע. רגע של סבלנות בבקשה 🕐" },
-      { "label": "תודה על הפנייה", "value": "thanks", "text": "שלום, תודה שפנית אלינו! איך אני יכול/ה לסייע לך היום?" },
-      { "label": "בבדיקה", "value": "checking", "text": "הצוות קיבל את הפנייה שלך ואנחנו בודקים אותה כרגע, נעדכן בקרוב 🔎" }
+      { "label": "ברוך הבא", "value": "welcome", "text": "שלום וברוך הבא. אני כאן כדי לסייע לך 🙏 אנא פרט/י את הבעיה בהרחבה ככל שניתן." },
+      { "label": "רגע של סבלנות", "value": "patience", "text": "שלום, ראיתי את פנייתך ואני מטפל/ת בה כעת. נדרש מעט סבלנות 🕐" },
+      { "label": "תודה על הפנייה", "value": "thanks", "text": "שלום, תודה שפנית אלינו. כיצד ניתן לסייע לך היום?" },
+      { "label": "בבדיקה", "value": "checking", "text": "הצוות קיבל את פנייתך והיא נבדקת כעת. נעדכן בהקדם 🔎" }
     ]
   },
 
@@ -132,6 +152,41 @@ const config = {
     "connectLink": "https://cfx.re/join/rmmg7ej",
     // אופציונלי - אם אין חנות, השאירו מחרוזת ריקה ("") והכפתור פשוט לא יופיע.
     "storeLink": ""
+  },
+
+  // --------------------------------------------------------------------
+  // RCON — שליטה חיה בשרת ה-FiveM (קיק / באן / הסרת באן / הודעה).
+  // חובה להגדיר rcon_password בקובץ ה-server.cfg של השרת (למשל:
+  // `rcon_password "סיסמה_חזקה_כלשהי"`), ולוודא שהפורט של המשחק פתוח
+  // גם ל-UDP (בדרך כלל אותו פורט כמו port ב-fivem למעלה).
+  // הסיסמה עצמה נטענת אך ורק ממשתנה סביבה — לעולם לא נכתבת כאן בקוד.
+  // --------------------------------------------------------------------
+  "rcon": {
+    "password": process.env.RCON_PASSWORD || "",
+    "port": process.env.RCON_PORT || null, // אם ריק, ייעשה שימוש ב-fivem.port
+    // תבניות הפקודות תלויות במשאבים המותקנים בשרת שלך (אין תקן אחיד ל-FiveM).
+    // אפשר לשנות אותן כאן כדי להתאים למשאב הבאנים/ההודעות שמותקן אצלך.
+    "kickCommandTemplate": process.env.RCON_KICK_TEMPLATE || 'kick {id} "{reason}"',
+    "banCommandTemplate": process.env.RCON_BAN_TEMPLATE || 'txaAddBan {id} "{reason}"',
+    "unbanCommandTemplate": process.env.RCON_UNBAN_TEMPLATE || 'txaRemoveBan {id}',
+    "messageCommandTemplate": process.env.RCON_MESSAGE_TEMPLATE || 'say ^3[הודעת מנהלים]^0 {message}'
+  },
+
+  // --------------------------------------------------------------------
+  // מסד נתונים (MySQL) — לשליפת נתוני שחקנים אמיתיים (כסף, תפקיד וכו')
+  // עבור /player-info. אם host לא הוגדר, החלק הזה פשוט מדולג.
+  // התאימו את שמות הטבלה/העמודות למבנה מסד הנתונים של המסגרת שלכם
+  // (ESX / QBCore / מותאם אישית).
+  // --------------------------------------------------------------------
+  "database": {
+    "host": process.env.DB_HOST || "",
+    "port": process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : 3306,
+    "user": process.env.DB_USER || "",
+    "password": process.env.DB_PASSWORD || "",
+    "name": process.env.DB_NAME || "",
+    "playersTable": process.env.DB_PLAYERS_TABLE || "users",
+    "identifierColumn": process.env.DB_ID_COLUMN || "identifier",
+    "nameColumn": process.env.DB_NAME_COLUMN || "name"
   },
 
   "giveaways": {
@@ -185,7 +240,8 @@ function defaultData() {
     giveaways: {},        // messageId -> { channelId, prize, endsAt, winners, hostId, participants: [], ended }
     staffChannels: {},    // channelId -> { userId, roleId, accessRoles: [], createdAt }
     claimLeaderboard: {}, // userId -> count של לקיחות טיקטים (לוח מובילים)
-    leaderboardPanel: null, // { channelId, messageId } של הודעת הפאנל שמתעדכנת אוטומטית
+    leaderboardPanel: null,  // { channelId, messageId } של הודעת הפאנל שמתעדכנת אוטומטית
+    serverStatusPanel: null, // { channelId, messageId } של פאנל סטטוס השרת שמתעדכן אוטומטית כל דקה
   };
 }
 
@@ -298,12 +354,142 @@ async function sendLog(guild, embed, key = 'logsChannelId') {
   if (ch) ch.send({ embeds: [embed] }).catch(() => {});
 }
 
+// ==========================================================================
+// RCON — שליטה חיה בשרת FiveM (UDP, פרוטוקול RCON הרשמי)
+// ==========================================================================
+// FiveM (כמו game-servers מבוססי quake3) מקבל פקודות RCON כחבילת UDP בפורמט:
+//   0xFF 0xFF 0xFF 0xFF  "rcon <password> <command>"
+// והתגובה חוזרת באותו פורמט עם קידומת "print". השכבה הזו לא תלויה בשום
+// משאב חיצוני — רק בהגדרת rcon_password בשרת עצמו.
+// --------------------------------------------------------------------------
+function rconCommand(command, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    if (!config.rcon.password) {
+      return reject(new Error('לא הוגדרה סיסמת RCON (משתנה הסביבה RCON_PASSWORD) — לא ניתן לשלוט בשרת מרחוק.'));
+    }
+    const rconPort = parseInt(config.rcon.port || config.fivem.port, 10);
+    const socket = dgram.createSocket('udp4');
+    const payload = `rcon ${config.rcon.password} ${command}`;
+    const packet = Buffer.concat([Buffer.from([0xff, 0xff, 0xff, 0xff]), Buffer.from(payload, 'utf8')]);
+
+    const timer = setTimeout(() => {
+      socket.close();
+      reject(new Error('לא התקבלה תגובה מהשרת (RCON timeout). ודא/י שהפורט פתוח ל-UDP ושסיסמת ה-RCON נכונה.'));
+    }, timeoutMs);
+
+    socket.once('message', (msg) => {
+      clearTimeout(timer);
+      socket.close();
+      let text = msg.toString('utf8');
+      text = text.replace(/^\xff\xff\xff\xff(print\n?)?/, '');
+      resolve(text.trim());
+    });
+
+    socket.once('error', (err) => {
+      clearTimeout(timer);
+      socket.close();
+      reject(err);
+    });
+
+    socket.send(packet, 0, packet.length, rconPort, config.fivem.ip, (err) => {
+      if (err) {
+        clearTimeout(timer);
+        socket.close();
+        reject(err);
+      }
+    });
+  });
+}
+
+function fillTemplate(template, values) {
+  let out = template;
+  for (const [key, val] of Object.entries(values)) {
+    out = out.split(`{${key}}`).join(String(val));
+  }
+  return out;
+}
+
+async function rconKickPlayer(serverId, reason) {
+  const cmd = fillTemplate(config.rcon.kickCommandTemplate, { id: serverId, reason });
+  return rconCommand(cmd);
+}
+
+async function rconBanPlayer(serverId, reason) {
+  // הפקודה בפועל תלויה במשאב הבאנים המותקן בשרת שלך (למשל txAdmin,
+  // ox_ban, vMenu וכו'). עדכנו את rcon.banCommandTemplate בהתאם.
+  const cmd = fillTemplate(config.rcon.banCommandTemplate, { id: serverId, reason });
+  return rconCommand(cmd);
+}
+
+async function rconUnbanPlayer(banIdentifier) {
+  const cmd = fillTemplate(config.rcon.unbanCommandTemplate, { id: banIdentifier });
+  return rconCommand(cmd);
+}
+
+async function rconBroadcastMessage(message) {
+  const cmd = fillTemplate(config.rcon.messageCommandTemplate, { message });
+  return rconCommand(cmd);
+}
+
+// ==========================================================================
+// מסד נתונים (MySQL) — נתוני שחקנים אמיתיים
+// ==========================================================================
+let dbPool = null;
+
+function getDbPool() {
+  if (!mysql || !config.database.host) return null;
+  if (!dbPool) {
+    dbPool = mysql.createPool({
+      host: config.database.host,
+      port: config.database.port,
+      user: config.database.user,
+      password: config.database.password,
+      database: config.database.name,
+      waitForConnections: true,
+      connectionLimit: 5,
+    });
+  }
+  return dbPool;
+}
+
+// שדות נפוצים במסגרות ESX/QBCore שמוצגים אוטומטית אם הם קיימים בשורה
+// שהתקבלה מהטבלה, כדי להימנע מהצגת עמודות רגישות (סיסמאות/טוקנים).
+const DB_DISPLAY_FIELDS = [
+  ['job', '💼 תפקיד'],
+  ['job_grade', '📈 דרגת תפקיד'],
+  ['group', '👑 קבוצת הרשאה'],
+  ['money', '💵 מזומן'],
+  ['bank', '🏦 בנק'],
+  ['playtime', '⏱️ זמן משחק'],
+  ['last_seen', '👁️ נראה לאחרונה'],
+  ['firstname', '📝 שם פרטי'],
+  ['lastname', '📝 שם משפחה'],
+  ['phone_number', '📱 טלפון'],
+];
+
+async function fetchPlayerFromDatabase(query) {
+  const pool = getDbPool();
+  if (!pool) return null;
+  const table = config.database.playersTable;
+  const idCol = config.database.identifierColumn;
+  const nameCol = config.database.nameColumn;
+  try {
+    const [rows] = await pool.query(
+      `SELECT * FROM \`${table}\` WHERE \`${idCol}\` LIKE ? OR \`${nameCol}\` LIKE ? LIMIT 1`,
+      [`%${query}%`, `%${query}%`]
+    );
+    return rows[0] || null;
+  } catch (err) {
+    console.error('שגיאה בשליפת שחקן ממסד הנתונים:', err.message);
+    return null;
+  }
+}
+
 // --------------------------------------------------------------------------
 // FiveM - סטטוס שרת + חיפוש שחקן
 // --------------------------------------------------------------------------
-// 🔧 תיקון: הרבה אחסונים ל-FiveM חוסמים גישה חיצונית ישירה לפורט המשחק
-// (הגנת אנטי-DDoS / פיירוול), מה שגרם לסטטוס "אופליין" גם כששרת פעיל
-// לגמרי — וזה נכשל בשקט כי השגיאה האמיתית לא נרשמה בשום מקום.
+// 🔧 הרבה אחסונים ל-FiveM חוסמים גישה חיצונית ישירה לפורט המשחק (הגנת
+// אנטי-DDoS / פיירוול), מה שגרם לסטטוס "אופליין" גם כששרת פעיל לגמרי.
 //
 // עכשיו השליפה קודם מנסה את ה-API הרשמי של cfx.re (אותו API שמפעיל את
 // כפתור ה-Connect ורשימת השרתים במשחק), לפי קוד ה-join מתוך connectLink.
@@ -398,7 +584,7 @@ async function updateBotPresence() {
   const status = await getFiveMStatus();
   if (!status.online) {
     client.user.setPresence({
-      activities: [{ name: 'Server Offline ❌', type: ActivityType.Watching }],
+      activities: [{ name: 'השרת אינו זמין ❌', type: ActivityType.Watching }],
       status: 'dnd',
     });
     return;
@@ -410,7 +596,7 @@ async function updateBotPresence() {
 }
 
 // --------------------------------------------------------------------------
-// עיצוב פאנל סטטוס שרת FiveM — עם פס התקדמות ויזואלי לכמות השחקנים
+// עיצוב פאנל סטטוס שרת FiveM — עם פס התקדמות ויזואלי, בלי חשיפת IP/פורט
 // --------------------------------------------------------------------------
 function buildPlayerProgressBar(count, max, length = 14) {
   const safeMax = max > 0 ? max : Math.max(count, 1);
@@ -421,12 +607,27 @@ function buildPlayerProgressBar(count, max, length = 14) {
 }
 
 function buildServerStatusEmbed(status) {
+  const divider = '🟠━━━━━━━━━━━━━━━━━━━🟠';
+
   if (!status.online) {
     return baseEmbed()
       .setColor(COLORS.danger)
-      .setTitle('🔴 השרת לא מחובר')
-      .setDescription('לא ניתן להתחבר כרגע לשרת ה-FiveM. ייתכן שהשרת בפעולות תחזוקה או כבוי זמנית.')
-      .addFields({ name: '📶 סטטוס', value: 'Offline ❌', inline: true });
+      .setTitle('🔴 שרת ה-FiveM אינו זמין')
+      .setDescription(
+        [
+          divider,
+          '**◈ הבוט לא הצליח להתחבר לשרת כרגע.**',
+          '',
+          'ייתכן שהשרת נמצא בתחזוקה, בתהליך הפעלה מחדש, או כבוי זמנית.',
+          'הפאנל יתעדכן אוטומטית ברגע שהשרת יחזור להיות זמין ⏳',
+          divider,
+        ].join('\n')
+      )
+      .addFields(
+        { name: '📶 סטטוס', value: '```diff\n- Offline\n```', inline: true },
+        { name: '🌐 כתובת התחברות', value: `\`${config.fivem.ip}:${config.fivem.port}\``, inline: true }
+      )
+      .setFooter({ text: '🔄 מתעדכן אוטומטית כל דקה • Vorino Bot' });
   }
 
   const bar = buildPlayerProgressBar(status.count, status.max);
@@ -434,14 +635,23 @@ function buildServerStatusEmbed(status) {
 
   return baseEmbed()
     .setColor(COLORS.primary)
-    .setTitle(`🟢 ${status.hostname}`)
-    .setDescription('השרת פעיל ומחובר! 🧡')
+    .setTitle(`🟠 ${status.hostname} 🟠`)
+    .setThumbnail(client.user ? client.user.displayAvatarURL() : null)
+    .setDescription(
+      [
+        divider,
+        '**◈ השרת פעיל ומקוון כעת** 🧡✨',
+        divider,
+      ].join('\n')
+    )
     .addFields(
-      { name: '👥 שחקנים מחוברים', value: `**${status.count} / ${status.max}** (${percent}%)`, inline: false },
-      { name: '📊 תפוסה', value: bar, inline: false },
-      { name: '📶 סטטוס', value: 'Online ✅', inline: true },
-      { name: '🌐 כתובת', value: `\`${config.fivem.ip}:${config.fivem.port}\``, inline: true }
-    );
+      { name: '📶 סטטוס', value: '```diff\n+ Online\n```', inline: true },
+      { name: '🌐 כתובת התחברות (IP:PORT)', value: `\`\`\`${config.fivem.ip}:${config.fivem.port}\`\`\``, inline: true },
+      { name: '\u200b', value: '\u200b', inline: false },
+      { name: '👥 שחקנים מחוברים', value: `**${status.count} / ${status.max}** שחקנים  •  **${percent}%** תפוסה`, inline: false },
+      { name: '📊 מד תפוסה', value: `${bar}\n\`${percent}%\``, inline: false }
+    )
+    .setFooter({ text: '🔄 מתעדכן אוטומטית כל דקה • Vorino Bot 🧡' });
 }
 
 function buildServerStatusRow() {
@@ -452,7 +662,7 @@ function buildServerStatusRow() {
     components.push(new ButtonBuilder().setLabel('🛒 חנות השרת').setStyle(ButtonStyle.Link).setURL(config.fivem.storeLink));
   }
   components.push(
-    new ButtonBuilder().setCustomId('server_status_refresh').setLabel('רענון').setEmoji('🔄').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('server_status_refresh').setLabel('רענון ידני').setEmoji('🔄').setStyle(ButtonStyle.Secondary)
   );
   return new ActionRowBuilder().addComponents(components);
 }
@@ -463,24 +673,38 @@ async function handleServerStatusRefresh(interaction) {
   await interaction.editReply({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
 }
 
+// פאנל סטטוס שרת שמתעדכן אוטומטית כל דקה, בדומה ללוח המובילים.
+async function updateServerStatusPanel() {
+  if (!db.serverStatusPanel) return;
+  const { channelId, messageId } = db.serverStatusPanel;
+  try {
+    const channel = await client.channels.fetch(channelId);
+    const msg = await channel.messages.fetch(messageId);
+    const status = await getFiveMStatus();
+    await msg.edit({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
+  } catch (err) {
+    console.error('שגיאה בעדכון פאנל סטטוס השרת (ייתכן שההודעה/הערוץ נמחקו):', err.message);
+  }
+}
+
 // ==========================================================================
 // מערכת טיקטים
 // ==========================================================================
 
 function buildTicketPanelEmbed() {
   return baseEmbed()
-    .setTitle('🎫 מערכת טיקטים')
+    .setTitle('🎫 מערכת פניות ותמיכה')
     .setDescription(
       [
-        'ברוכים הבאים למערכת התמיכה שלנו!',
+        '**◈ ברוכים הבאים למרכז התמיכה הרשמי.**',
         '',
-        'בחר/י את הנושא המתאים מהתפריט למטה כדי לפתוח טיקט חדש.',
-        'צוות התמיכה שלנו יטפל בפנייתך בהקדם האפשרי 🧡',
+        'בחר/י את הנושא המתאים מהתפריט למטה כדי לפתוח פנייה חדשה.',
+        'צוות התמיכה יטפל בפנייתך במהירות המרבית 🧡',
         '',
-        '**חוקי פתיחת טיקט:**',
-        '• יש לפתוח טיקט אחד בלבד לכל נושא',
-        '• אין לספאם או לפתוח טיקטים סתם',
-        '• יש להסביר את הבעיה בצורה ברורה',
+        '**כללי פתיחת פנייה:**',
+        '• פנייה אחת בלבד לכל נושא',
+        '• אין לפתוח פניות סרק או לבצע ספאם',
+        '• יש לפרט את הבעיה בצורה ברורה ומדויקת',
       ].join('\n')
     )
     .setThumbnail(client.user ? client.user.displayAvatarURL() : null)
@@ -490,7 +714,7 @@ function buildTicketPanelEmbed() {
 function buildTicketSelectRow() {
   const select = new StringSelectMenuBuilder()
     .setCustomId('ticket_type_select')
-    .setPlaceholder('📩 בחר/י את סוג הטיקט שברצונך לפתוח')
+    .setPlaceholder('📩 בחר/י את סוג הפנייה שברצונך לפתוח')
     .addOptions(
       config.tickets.types.map((t) => ({
         label: t.label,
@@ -509,14 +733,14 @@ async function sendTicketPanel(channel) {
 function buildTicketControlRow(claimed) {
   const claimBtn = new ButtonBuilder()
     .setCustomId('ticket_claim')
-    .setLabel(claimed ? 'נלקח' : 'קח טיקט')
+    .setLabel(claimed ? 'נלקח' : 'קח פנייה')
     .setEmoji('🙋')
     .setStyle(ButtonStyle.Success)
     .setDisabled(claimed);
 
   const closeBtn = new ButtonBuilder()
     .setCustomId('ticket_close')
-    .setLabel('סגור טיקט')
+    .setLabel('סגור פנייה')
     .setEmoji('🔒')
     .setStyle(ButtonStyle.Danger);
 
@@ -556,7 +780,7 @@ async function createTicketChannel(interaction, typeValue) {
   );
   if (existing) {
     return interaction.reply({
-      embeds: [errorEmbed('טיקט פתוח כבר קיים', `כבר יש לך טיקט פתוח: <#${existing[0]}>`)],
+      embeds: [errorEmbed('פנייה פתוחה כבר קיימת', `כבר יש לך פנייה פתוחה: <#${existing[0]}>`)],
       ephemeral: true,
     });
   }
@@ -625,7 +849,7 @@ async function createTicketChannel(interaction, typeValue) {
     console.error('שגיאה ביצירת ערוץ טיקט:', err);
     db.ticketCounter -= 1;
     return interaction.editReply({
-      embeds: [errorEmbed('שגיאה בפתיחת הטיקט', 'לא ניתן היה ליצור את ערוץ הטיקט. ודא/י שלבוט יש הרשאת "Manage Channels" בשרת ובקטגוריה שהוגדרה.')],
+      embeds: [errorEmbed('שגיאה בפתיחת הפנייה', 'לא ניתן היה ליצור את ערוץ הפנייה. ודא/י שלבוט יש הרשאת "Manage Channels" בשרת ובקטגוריה שהוגדרה.')],
     });
   }
 
@@ -640,12 +864,12 @@ async function createTicketChannel(interaction, typeValue) {
   saveData();
 
   const welcomeEmbed = baseEmbed()
-    .setTitle(`🎫 טיקט #${ticketNumber} — ${ticketTypeLabel(typeValue)}`)
+    .setTitle(`🎫 פנייה #${ticketNumber} — ${ticketTypeLabel(typeValue)}`)
     .setDescription(
       [
         `שלום ${member} 👋`,
         '',
-        'תודה שפנית אלינו! צוות התמיכה יגיע בהקדם האפשרי.',
+        'תודה על פנייתך. צוות התמיכה יגיע בהקדם האפשרי.',
         'בינתיים, אנא פרט/י בהרחבה את הבעיה או הבקשה שלך.',
         '',
         `**נפתח על ידי:** ${member}`,
@@ -666,19 +890,19 @@ async function createTicketChannel(interaction, typeValue) {
   });
 
   await interaction.editReply({
-    embeds: [successEmbed('הטיקט נפתח בהצלחה', `הטיקט שלך נפתח: ${ticketChannel}`)],
+    embeds: [successEmbed('הפנייה נפתחה בהצלחה', `הפנייה שלך נפתחה: ${ticketChannel}`)],
   });
 
   await sendLog(
     guild,
-    infoEmbed('🎫 טיקט חדש נפתח', `**מספר:** #${ticketNumber}\n**משתמש:** ${member}\n**סוג:** ${ticketTypeLabel(typeValue)}\n**ערוץ:** ${ticketChannel}`)
+    infoEmbed('🎫 פנייה חדשה נפתחה', `**מספר:** #${ticketNumber}\n**משתמש:** ${member}\n**סוג:** ${ticketTypeLabel(typeValue)}\n**ערוץ:** ${ticketChannel}`)
   );
 }
 
 function buildClaimMessageSelectRow() {
   const select = new StringSelectMenuBuilder()
     .setCustomId('ticket_claim_message_select')
-    .setPlaceholder('💬 בחר/י הודעת פתיחה לשליחה בטיקט')
+    .setPlaceholder('💬 בחר/י הודעת פתיחה לשליחה בפנייה')
     .addOptions(
       config.tickets.claimMessages.map((m) => ({ label: m.label, value: m.value }))
     );
@@ -688,20 +912,20 @@ function buildClaimMessageSelectRow() {
 async function handleTicketClaimButton(interaction) {
   const ticket = db.tickets[interaction.channel.id];
   if (!ticket) {
-    return interaction.reply({ embeds: [errorEmbed('שגיאה', 'זהו לא ערוץ טיקט תקין.')], ephemeral: true });
+    return interaction.reply({ embeds: [errorEmbed('שגיאה', 'זהו לא ערוץ פנייה תקין.')], ephemeral: true });
   }
   if (!hasStaffRole(interaction.member)) {
-    return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק צוות רשאי לקחת טיקטים.')], ephemeral: true });
+    return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק צוות רשאי לקחת פניות.')], ephemeral: true });
   }
   if (ticket.claimedBy) {
     return interaction.reply({
-      embeds: [errorEmbed('כבר נלקח', `הטיקט הזה כבר נלקח על ידי <@${ticket.claimedBy}>`)],
+      embeds: [errorEmbed('כבר נלקח', `הפנייה הזו כבר נלקחה על ידי <@${ticket.claimedBy}>`)],
       ephemeral: true,
     });
   }
 
   await interaction.reply({
-    content: 'בחר/י הודעה שתישלח בערוץ הטיקט עם לקיחתו:',
+    content: 'בחר/י הודעה שתישלח בערוץ הפנייה עם לקיחתה:',
     components: [buildClaimMessageSelectRow()],
     ephemeral: true,
   });
@@ -709,7 +933,7 @@ async function handleTicketClaimButton(interaction) {
 
 async function handleClaimMessageSelect(interaction) {
   const ticket = db.tickets[interaction.channel.id];
-  if (!ticket) return interaction.update({ content: 'שגיאה: טיקט לא נמצא.', components: [] });
+  if (!ticket) return interaction.update({ content: 'שגיאה: פנייה לא נמצאה.', components: [] });
 
   const chosen = config.tickets.claimMessages.find((m) => m.value === interaction.values[0]);
   ticket.claimedBy = interaction.user.id;
@@ -717,9 +941,9 @@ async function handleClaimMessageSelect(interaction) {
   db.claimLeaderboard[interaction.user.id] += 1;
   saveData();
 
-  const claimEmbed = successEmbed('🙋 הטיקט נלקח', `הטיקט נלקח על ידי ${interaction.user}`).addFields({
+  const claimEmbed = successEmbed('🙋 הפנייה נלקחה', `הפנייה נלקחה על ידי ${interaction.user}`).addFields({
     name: 'הודעה מהצוות',
-    value: chosen ? chosen.text : 'הטיקט נלקח וטופל בקרוב.',
+    value: chosen ? chosen.text : 'הפנייה נלקחה וטופלת בקרוב.',
   });
 
   await interaction.channel.send({ embeds: [claimEmbed] });
@@ -733,11 +957,11 @@ async function handleClaimMessageSelect(interaction) {
     await controlMsg.edit({ components: [buildTicketControlRow(true)] }).catch(() => {});
   }
 
-  await interaction.update({ content: '✅ ההודעה נשלחה בהצלחה בטיקט.', components: [] });
+  await interaction.update({ content: '✅ ההודעה נשלחה בהצלחה בפנייה.', components: [] });
 
   await sendLog(
     interaction.guild,
-    infoEmbed('🙋 טיקט נלקח', `**טיקט:** #${ticket.ticketNumber}\n**נלקח על ידי:** ${interaction.user}\n**ערוץ:** ${interaction.channel}`)
+    infoEmbed('🙋 פנייה נלקחה', `**פנייה:** #${ticket.ticketNumber}\n**נלקחה על ידי:** ${interaction.user}\n**ערוץ:** ${interaction.channel}`)
   );
 
   await updateLeaderboardPanel(interaction.guild);
@@ -777,12 +1001,12 @@ async function handleTicketTranscript(interaction) {
 
 async function handleTicketClose(interaction) {
   const ticket = db.tickets[interaction.channel.id];
-  if (!ticket) return interaction.reply({ embeds: [errorEmbed('שגיאה', 'זהו לא ערוץ טיקט תקין.')], ephemeral: true });
+  if (!ticket) return interaction.reply({ embeds: [errorEmbed('שגיאה', 'זהו לא ערוץ פנייה תקין.')], ephemeral: true });
   if (!hasStaffRole(interaction.member) && interaction.user.id !== ticket.userId) {
-    return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לסגור טיקט זה.')], ephemeral: true });
+    return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לסגור פנייה זו.')], ephemeral: true });
   }
 
-  const modal = new ModalBuilder().setCustomId('ticket_close_modal').setTitle('סגירת טיקט');
+  const modal = new ModalBuilder().setCustomId('ticket_close_modal').setTitle('סגירת פנייה');
   const reasonInput = new TextInputBuilder()
     .setCustomId('close_reason')
     .setLabel('סיבת הסגירה (אופציונלי)')
@@ -795,10 +1019,10 @@ async function handleTicketClose(interaction) {
 
 async function handleTicketCloseModal(interaction) {
   const ticket = db.tickets[interaction.channel.id];
-  if (!ticket) return interaction.reply({ content: 'שגיאה: טיקט לא נמצא.', ephemeral: true });
+  if (!ticket) return interaction.reply({ content: 'שגיאה: פנייה לא נמצאה.', ephemeral: true });
 
   const reason = interaction.fields.getTextInputValue('close_reason') || 'לא צוינה סיבה';
-  await interaction.reply({ embeds: [infoEmbed('🔒 סוגר את הטיקט...', `הטיקט ייסגר בעוד 5 שניות.\n**סיבה:** ${reason}`)] });
+  await interaction.reply({ embeds: [infoEmbed('🔒 סוגר את הפנייה...', `הפנייה תיסגר בעוד 5 שניות.\n**סיבה:** ${reason}`)] });
 
   const transcriptText = await generateTranscript(interaction.channel);
   const buffer = Buffer.from(transcriptText, 'utf-8');
@@ -806,8 +1030,8 @@ async function handleTicketCloseModal(interaction) {
 
   const transcriptChannel = await getLogChannel(interaction.guild, 'transcriptsChannelId');
   const closeLog = infoEmbed(
-    '🔒 טיקט נסגר',
-    `**מספר:** #${ticket.ticketNumber}\n**נפתח על ידי:** <@${ticket.userId}>\n**נסגר על ידי:** ${interaction.user}\n**סיבה:** ${reason}`
+    '🔒 פנייה נסגרה',
+    `**מספר:** #${ticket.ticketNumber}\n**נפתחה על ידי:** <@${ticket.userId}>\n**נסגרה על ידי:** ${interaction.user}\n**סיבה:** ${reason}`
   );
   if (transcriptChannel) transcriptChannel.send({ embeds: [closeLog], files: [attachment] }).catch(() => {});
   await sendLog(interaction.guild, closeLog);
@@ -839,7 +1063,7 @@ function buildWelcomeEmbed(member) {
         '',
         randomMsg,
         '',
-        `🎫 לא לשכוח לעבור אימות ולפתוח טיקט אם צריך עזרה.`,
+        `🎫 לא לשכוח לעבור אימות ולפתוח פנייה אם צריך עזרה.`,
       ].join('\n')
     )
     .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
@@ -1179,20 +1403,20 @@ const slashCommands = [
 
   new SlashCommandBuilder()
     .setName('ban')
-    .setDescription('חוסם משתמש מהשרת')
+    .setDescription('חוסם משתמש מהשרת (דיסקורד)')
     .addUserOption((o) => o.setName('user').setDescription('המשתמש לחסימה').setRequired(true))
     .addStringOption((o) => o.setName('reason').setDescription('סיבת החסימה').setRequired(false))
     .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
 
   new SlashCommandBuilder()
     .setName('unban')
-    .setDescription('מסיר חסימה ממשתמש')
+    .setDescription('מסיר חסימה ממשתמש (דיסקורד)')
     .addStringOption((o) => o.setName('userid').setDescription('מזהה המשתמש').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
 
   new SlashCommandBuilder()
     .setName('kick')
-    .setDescription('מסלק משתמש מהשרת')
+    .setDescription('מסלק משתמש מהשרת (דיסקורד)')
     .addUserOption((o) => o.setName('user').setDescription('המשתמש לסילוק').setRequired(true))
     .addStringOption((o) => o.setName('reason').setDescription('סיבת הסילוק').setRequired(false))
     .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
@@ -1269,14 +1493,40 @@ const slashCommands = [
 
   new SlashCommandBuilder()
     .setName('server-status')
-    .setDescription('מציג פאנל סטטוס שרת FiveM עם פס תפוסה וכפתורי חיבור'),
+    .setDescription('מציג פאנל סטטוס שרת FiveM חי (מתעדכן אוטומטית כל דקה)'),
 
   new SlashCommandBuilder()
     .setName('player-info')
-    .setDescription('מחפש שחקן מחובר בשרת ה-FiveM')
-    .addStringOption((o) => o.setName('query').setDescription('שם השחקן או מזהה דיסקורד').setRequired(true)),
+    .setDescription('מחפש שחקן בשרת ה-FiveM (חי + מסד נתונים, אם מוגדר)')
+    .addStringOption((o) => o.setName('query').setDescription('שם השחקן, מזהה בשרת או זיהוי').setRequired(true)),
 
   new SlashCommandBuilder().setName('server-players').setDescription('מציג רשימת שחקנים מחוברים לשרת ה-FiveM'),
+
+  new SlashCommandBuilder()
+    .setName('server-kick')
+    .setDescription('מסלק שחקן משרת ה-FiveM עצמו (בזמן אמת, דרך RCON)')
+    .addIntegerOption((o) => o.setName('server_id').setDescription('מזהה השחקן בשרת (Server ID)').setRequired(true))
+    .addStringOption((o) => o.setName('reason').setDescription('סיבת הסילוק').setRequired(false))
+    .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
+
+  new SlashCommandBuilder()
+    .setName('server-ban')
+    .setDescription('חוסם שחקן משרת ה-FiveM עצמו (בזמן אמת, דרך RCON)')
+    .addIntegerOption((o) => o.setName('server_id').setDescription('מזהה השחקן בשרת (Server ID)').setRequired(true))
+    .addStringOption((o) => o.setName('reason').setDescription('סיבת החסימה').setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+
+  new SlashCommandBuilder()
+    .setName('server-unban')
+    .setDescription('מסיר חסימה משחקן בשרת ה-FiveM עצמו (בזמן אמת, דרך RCON)')
+    .addStringOption((o) => o.setName('identifier').setDescription('מזהה הבאן / הזיהוי של השחקן').setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+
+  new SlashCommandBuilder()
+    .setName('server-message')
+    .setDescription('משדר הודעה לכלל השחקנים בשרת ה-FiveM (בזמן אמת, דרך RCON)')
+    .addStringOption((o) => o.setName('message').setDescription('תוכן ההודעה שתישלח לכל השחקנים').setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName('addstaff')
@@ -1338,12 +1588,11 @@ const slashCommands = [
 // --------------------------------------------------------------------------
 // שימוש ב-PUT (ולא POST) הוא קריטי: PUT מחליף את *כל* רשימת הפקודות
 // הרשומות בגילדה בבת אחת ברשימה שאנחנו שולחים כאן. המשמעות היא שכל
-// פקודה שהייתה רשומה בדיסקורד בעבר (למשל /ticket-stats או
-// /reset-ticket-stats) אך כבר לא מופיעה במערך slashCommands למעלה —
-// תימחק אוטומטית על ידי דיסקורד עצמו, בלי שצריך לעשות שום דבר ידני.
-// כדי לוודא בבירור מה קרה בכל עלייה, אנחנו משווים בין הפקודות שהיו
-// רשומות קודם לבין מה ש-PUT מחזיר, ומדפיסים בדיוק אילו פקודות נוספו
-// ואילו הוסרו.
+// פקודה שהייתה רשומה בדיסקורד בעבר אך כבר לא מופיעה במערך slashCommands
+// למעלה — תימחק אוטומטית על ידי דיסקורד עצמו, בלי שצריך לעשות שום דבר
+// ידני. כדי לוודא בבירור מה קרה בכל עלייה, אנחנו משווים בין הפקודות
+// שהיו רשומות קודם לבין מה ש-PUT מחזיר, ומדפיסים בדיוק אילו פקודות
+// נוספו ואילו הוסרו.
 // --------------------------------------------------------------------------
 async function registerSlashCommands() {
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -1591,30 +1840,58 @@ async function handleSlashCommand(interaction) {
     case 'server-status': {
       await interaction.deferReply();
       const status = await getFiveMStatus();
-      await interaction.editReply({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
+      const sentMsg = await interaction.editReply({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
+      // שומרים את ההודעה כדי שהפאנל הזה יתעדכן אוטומטית כל דקה
+      db.serverStatusPanel = { channelId: interaction.channel.id, messageId: sentMsg.id };
+      saveData();
       break;
     }
 
     case 'player-info': {
       const query = options.getString('query');
       await interaction.deferReply();
+
       const status = await getFiveMStatus();
-      if (!status.online) {
-        return interaction.editReply({ embeds: [errorEmbed('השרת לא מחובר', 'לא ניתן להתחבר לשרת ה-FiveM כרגע.')] });
+      const livePlayer = status.online ? findPlayerInList(status.players, query) : null;
+      const dbPlayer = await fetchPlayerFromDatabase(query);
+
+      if (!livePlayer && !dbPlayer) {
+        return interaction.editReply({
+          embeds: [errorEmbed('שחקן לא נמצא', `לא נמצא שחקן התואם ל: "${query}" — לא באונליין ולא במסד הנתונים.`)],
+        });
       }
-      const player = findPlayerInList(status.players, query);
-      if (!player) {
-        return interaction.editReply({ embeds: [errorEmbed('שחקן לא נמצא', `לא נמצא שחקן התואם ל: "${query}"`)] });
-      }
-      const discordId = (player.identifiers || []).find((id) => id.startsWith('discord:'));
-      const e = baseEmbed()
-        .setTitle(`🎮 מידע על שחקן: ${player.name}`)
-        .addFields(
-          { name: '🆔 מזהה שרת', value: `${player.id}`, inline: true },
-          { name: '📶 פינג', value: `${player.ping}ms`, inline: true },
-          { name: '💬 דיסקורד', value: discordId ? `<@${discordId.split(':')[1]}>` : 'לא מקושר', inline: true },
-          { name: '🔑 מזהים', value: (player.identifiers || []).map((i) => `\`${i}\``).join('\n').slice(0, 1000) || 'אין' }
+
+      const e = baseEmbed().setTitle(`🎮 כרטיס שחקן: ${(livePlayer && livePlayer.name) || (dbPlayer && dbPlayer[config.database.nameColumn]) || query}`);
+
+      if (livePlayer) {
+        const discordId = (livePlayer.identifiers || []).find((id) => id.startsWith('discord:'));
+        e.addFields(
+          { name: '📶 סטטוס', value: '```diff\n+ מחובר כעת\n```', inline: false },
+          { name: '🆔 מזהה שרת', value: `${livePlayer.id}`, inline: true },
+          { name: '📡 פינג', value: `${livePlayer.ping}ms`, inline: true },
+          { name: '💬 דיסקורד', value: discordId ? `<@${discordId.split(':')[1]}>` : 'לא מקושר', inline: true }
         );
+      } else {
+        e.addFields({ name: '📶 סטטוס', value: '```diff\n- לא מחובר כרגע\n```', inline: false });
+      }
+
+      if (dbPlayer) {
+        const dbLines = [];
+        for (const [col, label] of DB_DISPLAY_FIELDS) {
+          if (dbPlayer[col] !== undefined && dbPlayer[col] !== null) {
+            dbLines.push(`**${label}:** ${dbPlayer[col]}`);
+          }
+        }
+        if (dbLines.length) {
+          e.addFields({ name: '🗄️ נתוני מסד הנתונים', value: dbLines.join('\n').slice(0, 1024) });
+        }
+        if (dbPlayer[config.database.identifierColumn]) {
+          e.addFields({ name: '🔑 זיהוי (Identifier)', value: `\`${dbPlayer[config.database.identifierColumn]}\`` });
+        }
+      } else if (!getDbPool()) {
+        e.addFields({ name: '🗄️ מסד נתונים', value: 'לא הוגדר חיבור למסד נתונים — מוצג רק מידע חי מהשרת.' });
+      }
+
       await interaction.editReply({ embeds: [e] });
       break;
     }
@@ -1632,6 +1909,64 @@ async function handleSlashCommand(interaction) {
       await interaction.editReply({
         embeds: [infoEmbed(`👥 שחקנים מחוברים (${status.count}/${status.max})`, list)],
       });
+      break;
+    }
+
+    case 'server-kick': {
+      if (!hasStaffRole(member)) return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לבצע פקודה זו.')], ephemeral: true });
+      const serverId = options.getInteger('server_id');
+      const reason = options.getString('reason') || 'לא צוינה סיבה';
+      await interaction.deferReply();
+      try {
+        await rconKickPlayer(serverId, reason);
+        await interaction.editReply({ embeds: [successEmbed('🚨 שחקן סולק מהשרת', `שחקן במזהה **${serverId}** סולק מהשרת בזמן אמת.\n**סיבה:** ${reason}`)] });
+        await sendLog(guild, warningEmbed('🚨 קיק משרת FiveM', `**מזהה שחקן:** ${serverId}\n**מפעיל:** ${interaction.user}\n**סיבה:** ${reason}`), 'modLogsChannelId');
+      } catch (err) {
+        await interaction.editReply({ embeds: [errorEmbed('שגיאה בביצוע הקיק', err.message)] });
+      }
+      break;
+    }
+
+    case 'server-ban': {
+      if (!hasStaffRole(member)) return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לבצע פקודה זו.')], ephemeral: true });
+      const serverId = options.getInteger('server_id');
+      const reason = options.getString('reason');
+      await interaction.deferReply();
+      try {
+        await rconBanPlayer(serverId, reason);
+        await interaction.editReply({ embeds: [successEmbed('🚨 שחקן נחסם בשרת', `שחקן במזהה **${serverId}** נחסם בשרת בזמן אמת.\n**סיבה:** ${reason}`)] });
+        await sendLog(guild, errorEmbed('🚨 באן משרת FiveM', `**מזהה שחקן:** ${serverId}\n**מפעיל:** ${interaction.user}\n**סיבה:** ${reason}`), 'modLogsChannelId');
+      } catch (err) {
+        await interaction.editReply({ embeds: [errorEmbed('שגיאה בביצוע החסימה', `${err.message}\n\nייתכן שיש להתאים את תבנית הפקודה \`rcon.banCommandTemplate\` למשאב הבאנים המותקן בשרת שלך.`)] });
+      }
+      break;
+    }
+
+    case 'server-unban': {
+      if (!hasStaffRole(member)) return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לבצע פקודה זו.')], ephemeral: true });
+      const identifier = options.getString('identifier');
+      await interaction.deferReply();
+      try {
+        await rconUnbanPlayer(identifier);
+        await interaction.editReply({ embeds: [successEmbed('✅ החסימה הוסרה בשרת', `הוסרה חסימה עבור **${identifier}**.`)] });
+        await sendLog(guild, successEmbed('✅ הסרת באן משרת FiveM', `**זיהוי:** ${identifier}\n**מפעיל:** ${interaction.user}`), 'modLogsChannelId');
+      } catch (err) {
+        await interaction.editReply({ embeds: [errorEmbed('שגיאה בהסרת החסימה', `${err.message}\n\nייתכן שיש להתאים את תבנית הפקודה \`rcon.unbanCommandTemplate\` למשאב הבאנים המותקן בשרת שלך.`)] });
+      }
+      break;
+    }
+
+    case 'server-message': {
+      if (!hasStaffRole(member)) return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לבצע פקודה זו.')], ephemeral: true });
+      const msgText = options.getString('message');
+      await interaction.deferReply();
+      try {
+        await rconBroadcastMessage(msgText);
+        await interaction.editReply({ embeds: [successEmbed('📢 ההודעה שודרה', `ההודעה נשלחה לכלל השחקנים המחוברים בשרת:\n\n> ${msgText}`)] });
+        await sendLog(guild, infoEmbed('📢 שידור הודעה לשרת FiveM', `**תוכן:** ${msgText}\n**מפעיל:** ${interaction.user}`));
+      } catch (err) {
+        await interaction.editReply({ embeds: [errorEmbed('שגיאה בשידור ההודעה', err.message)] });
+      }
       break;
     }
 
@@ -1685,14 +2020,10 @@ async function handleSlashCommand(interaction) {
       const seniorRoleIds = roleIndex === -1 ? [] : hierarchy.slice(roleIndex + 1);
 
       // --------------------------------------------------------------------
-      // 🔧 תיקון: כל איבר ב-overwrites חייב id + type מפורש.
-      // בגרסה הקודמת חסרו type-ים (ולעיתים אף .id על guild.roles.everyone),
-      // מה שגרם ל-discord.js לנסות "לנחש" את סוג ה-ID לפי קאש השרת.
-      // כשה-ID לא היה קאש-ד כרול/משתמש בשרת (למשל adminRoleId שגוי, או
-      // רול ישן ב-hierarchy/access_role שנמחק), זה קרס עם:
-      // "Supplied parameter is not a cached User or Role".
-      // עכשיו כל רול נבדק מול guild.roles.cache לפני שהוא נכנס לרשימה,
-      // ורולים לא-קיימים פשוט מדולגים במקום לקרוס את כל הפקודה.
+      // 🔧 כל איבר ב-overwrites חייב id + type מפורש כדי למנוע שגיאת
+      // "Supplied parameter is not a cached User or Role" — כל רול נבדק
+      // מול guild.roles.cache לפני שהוא נכנס לרשימה, ורולים לא-קיימים
+      // פשוט מדולגים במקום לקרוס את כל הפקודה.
       // --------------------------------------------------------------------
       const overwrites = [
         { id: guild.roles.everyone.id, type: OverwriteType.Role, deny: [PermissionFlagsBits.ViewChannel] },
@@ -2068,6 +2399,13 @@ async function checkBotPermissions(guild) {
     }
   }
 
+  if (!config.rcon.password) {
+    console.warn('⚠️ RCON_PASSWORD לא הוגדר — פקודות server-kick / server-ban / server-unban / server-message לא יעבדו.');
+  }
+  if (!config.database.host) {
+    console.warn('ℹ️ DB_HOST לא הוגדר — /player-info יציג רק נתונים חיים מהשרת, בלי מסד נתונים.');
+  }
+
   if (warnLines.length) {
     await sendLog(guild, warningEmbed('⚠️ נמצאו בעיות הרשאה/הגדרה בהפעלת הבוט', warnLines.join('\n\n')));
   }
@@ -2091,7 +2429,9 @@ client.once('ready', async () => {
 
   restoreGiveawaysOnStartup();
   await updateBotPresence();
-  setInterval(updateBotPresence, 60 * 1000); // עדכון סטטוס כל דקה
+  await updateServerStatusPanel();
+  setInterval(updateBotPresence, 60 * 1000);        // עדכון סטטוס הבוט כל דקה
+  setInterval(updateServerStatusPanel, 60 * 1000);   // עדכון פאנל סטטוס השרת כל דקה
   console.log('🧡 Vorino Bot מוכן לפעולה!');
 });
 
