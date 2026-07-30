@@ -23,8 +23,9 @@
  *     משותפת) מול משאב Lua ייעודי שרץ בתוך שרת ה-FiveM עצמו, לביצוע
  *     פעולות ניהול אמיתיות: קיק, באן, הסרת באן ושידור הודעה — ישירות
  *     מפקודות סלאש בדיסקורד. כל בקשה ותגובה נרשמות ללוג.
- *   • /player-info משולבת כעת גם עם מסד נתונים (MySQL) של השרת, ומציגה
- *     נתוני שחקן אמיתיים (כסף, תפקיד, לישן זיהוי וכו') לצד הסטטוס החי.
+ *   • /player-info משולבת כעת גם עם מסד נתונים (טבלת Gamers), שנשלף
+ *     ישירות דרך Vorino Bridge בתוך שרת ה-FiveM — הבוט עצמו לא מתחבר
+ *     למסד הנתונים בכלל, כך שאין צורך לחשוף אותו כלפי חוץ.
  *   • טקסטים עוצבו מחדש לסגנון מקצועי ורציני יותר, עם אלמנטים ויזואליים
  *     בולטים (🚨 / 💠 / ✨) לשמירה על אופי כתום-זוהר של הבוט.
  * ==========================================================================
@@ -57,15 +58,6 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const http = require('http');
-
-// mysql2 נדרש רק אם הוגדר חיבור למסד נתונים (config.database.host).
-// אם לא הותקן ולא הוגדר חיבור, הבוט ימשיך לעבוד רגיל בלי החלק הזה.
-let mysql = null;
-try {
-  mysql = require('mysql2/promise');
-} catch {
-  console.warn('ℹ️ החבילה mysql2 לא מותקנת — פקודת /player-info תעבוד רק עם נתונים חיים מהשרת, בלי מסד נתונים. הרצה: npm install mysql2');
-}
 
 // --------------------------------------------------------------------------
 // שרת HTTP קטן — נדרש כדי שרנדר (Render) יזהה את השירות כ-"Web Service" חי.
@@ -164,25 +156,8 @@ const config = {
   // הסיסמה עצמה נטענת אך ורק ממשתנה סביבה — לעולם לא נכתבת כאן בקוד.
   // --------------------------------------------------------------------
   "bridge": {
-    "secret": VorinoMod || "",
+    "secret": process.env.VORINO_BRIDGE_SECRET || "",
     "baseUrl": "" // מוגדר בפועל מיד אחרי יצירת האובייקט (תלוי ב-fivem.ip/port)
-  },
-
-  // --------------------------------------------------------------------
-  // מסד נתונים (MySQL) — לשליפת נתוני שחקנים אמיתיים (כסף, תפקיד וכו')
-  // עבור /player-info. אם host לא הוגדר, החלק הזה פשוט מדולג.
-  // התאימו את שמות הטבלה/העמודות למבנה מסד הנתונים של המסגרת שלכם
-  // (ESX / QBCore / מותאם אישית).
-  // --------------------------------------------------------------------
-  "database": {
-    "host": process.env.DB_HOST || "",
-    "port": process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : 3306,
-    "user": process.env.DB_USER || "",
-    "password": process.env.DB_PASSWORD || "",
-    "name": process.env.DB_NAME || "",
-    "playersTable": process.env.DB_PLAYERS_TABLE || "users",
-    "identifierColumn": process.env.DB_ID_COLUMN || "identifier",
-    "nameColumn": process.env.DB_NAME_COLUMN || "name"
   },
 
   "giveaways": {
@@ -412,55 +387,19 @@ async function bridgeBroadcastMessage(message) {
 }
 
 // ==========================================================================
-// מסד נתונים (MySQL) — נתוני שחקנים אמיתיים
+// נתוני שחקנים ממסד הנתונים — נשלפים מתוך השרת עצמו דרך Vorino Bridge
 // ==========================================================================
-let dbPool = null;
-
-function getDbPool() {
-  if (!mysql || !config.database.host) return null;
-  if (!dbPool) {
-    dbPool = mysql.createPool({
-      host: config.database.host,
-      port: config.database.port,
-      user: config.database.user,
-      password: config.database.password,
-      database: config.database.name,
-      waitForConnections: true,
-      connectionLimit: 5,
-    });
-  }
-  return dbPool;
-}
-
-// שדות נפוצים במסגרות ESX/QBCore שמוצגים אוטומטית אם הם קיימים בשורה
-// שהתקבלה מהטבלה, כדי להימנע מהצגת עמודות רגישות (סיסמאות/טוקנים).
-const DB_DISPLAY_FIELDS = [
-  ['job', '💼 תפקיד'],
-  ['job_grade', '📈 דרגת תפקיד'],
-  ['group', '👑 קבוצת הרשאה'],
-  ['money', '💵 מזומן'],
-  ['bank', '🏦 בנק'],
-  ['playtime', '⏱️ זמן משחק'],
-  ['last_seen', '👁️ נראה לאחרונה'],
-  ['firstname', '📝 שם פרטי'],
-  ['lastname', '📝 שם משפחה'],
-  ['phone_number', '📱 טלפון'],
-];
-
+// הבוט לא מתחבר למסד הנתונים ישירות בכלל. הבקשה נשלחת למשאב ה-Lua
+// (vorino_bridge/server.lua) שרץ בתוך שרת ה-FiveM, והוא זה שמריץ את
+// שאילתת ה-SQL בעזרת oxmysql / mysql-async שכבר מותקן שם, ומחזיר את
+// התוצאה כ-JSON. כך אין צורך לחשוף את מסד הנתונים כלפי חוץ בכלל.
+// --------------------------------------------------------------------------
 async function fetchPlayerFromDatabase(query) {
-  const pool = getDbPool();
-  if (!pool) return null;
-  const table = config.database.playersTable;
-  const idCol = config.database.identifierColumn;
-  const nameCol = config.database.nameColumn;
   try {
-    const [rows] = await pool.query(
-      `SELECT * FROM \`${table}\` WHERE \`${idCol}\` LIKE ? OR \`${nameCol}\` LIKE ? LIMIT 1`,
-      [`%${query}%`, `%${query}%`]
-    );
-    return rows[0] || null;
+    const result = await bridgeRequest('/vorino/player-info', { query });
+    return result.player || null;
   } catch (err) {
-    console.error('שגיאה בשליפת שחקן ממסד הנתונים:', err.message);
+    console.warn(`ℹ️ [Vorino Bridge] לא ניתן היה לשלוף נתוני מסד נתונים: ${err.message}`);
     return null;
   }
 }
@@ -1841,7 +1780,7 @@ async function handleSlashCommand(interaction) {
         });
       }
 
-      const e = baseEmbed().setTitle(`🎮 כרטיס שחקן: ${(livePlayer && livePlayer.name) || (dbPlayer && dbPlayer[config.database.nameColumn]) || query}`);
+      const e = baseEmbed().setTitle(`🎮 כרטיס שחקן: ${(livePlayer && livePlayer.name) || query}`);
 
       if (livePlayer) {
         const discordId = (livePlayer.identifiers || []).find((id) => id.startsWith('discord:'));
@@ -1856,20 +1795,18 @@ async function handleSlashCommand(interaction) {
       }
 
       if (dbPlayer) {
-        const dbLines = [];
-        for (const [col, label] of DB_DISPLAY_FIELDS) {
-          if (dbPlayer[col] !== undefined && dbPlayer[col] !== null) {
-            dbLines.push(`**${label}:** ${dbPlayer[col]}`);
-          }
-        }
+        // מציג את כל השדות שהשרת החזיר בפועל מטבלת Gamers, פרט לשדות רגישים
+        // (סיסמאות/טוקנים/כתובות IP) שמסוננים תמיד כבסיס בטיחות.
+        const blacklist = ['password', 'pass', 'token', 'secret', 'hwid', 'ip'];
+        const dbLines = Object.entries(dbPlayer)
+          .filter(([key, val]) => val !== null && val !== undefined && !blacklist.some((b) => key.toLowerCase().includes(b)))
+          .slice(0, 20)
+          .map(([key, val]) => `**${key}:** ${val}`);
         if (dbLines.length) {
-          e.addFields({ name: '🗄️ נתוני מסד הנתונים', value: dbLines.join('\n').slice(0, 1024) });
+          e.addFields({ name: '🗄️ נתוני מסד הנתונים (Gamers)', value: dbLines.join('\n').slice(0, 1024) });
         }
-        if (dbPlayer[config.database.identifierColumn]) {
-          e.addFields({ name: '🔑 זיהוי (Identifier)', value: `\`${dbPlayer[config.database.identifierColumn]}\`` });
-        }
-      } else if (!getDbPool()) {
-        e.addFields({ name: '🗄️ מסד נתונים', value: 'לא הוגדר חיבור למסד נתונים — מוצג רק מידע חי מהשרת.' });
+      } else {
+        e.addFields({ name: '🗄️ מסד נתונים', value: 'לא נמצאו נתונים במסד הנתונים עבור חיפוש זה (או שהגשר לשרת לא הגיב).' });
       }
 
       await interaction.editReply({ embeds: [e] });
@@ -2380,10 +2317,7 @@ async function checkBotPermissions(guild) {
   }
 
   if (!config.bridge.secret) {
-    console.warn('⚠️ VORINO_BRIDGE_SECRET לא הוגדר — פקודות server-kick / server-ban / server-unban / server-message לא יעבדו עד שתגדירו אותו (ואת אותה סיסמה בדיוק ב-server.cfg תחת vorino_secret).');
-  }
-  if (!config.database.host) {
-    console.warn('ℹ️ DB_HOST לא הוגדר — /player-info יציג רק נתונים חיים מהשרת, בלי מסד נתונים.');
+    console.warn('⚠️ VORINO_BRIDGE_SECRET לא הוגדר — פקודות server-kick / server-ban / server-unban / server-message ו-/player-info (חלק ה-SQL) לא יעבדו עד שתגדירו אותו (ואת אותה סיסמה בדיוק ב-server.cfg תחת vorino_secret).');
   }
 
   if (warnLines.length) {
