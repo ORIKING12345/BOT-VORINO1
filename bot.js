@@ -8,27 +8,23 @@
  *   2. מערכת אימות בכפתור (רול מיידי)
  *   3. מערכת הגרלות (כפתור כניסה, ספירת משתתפים, בחירת זוכים אוטומטית)
  *   4. מערכת סטטוס שרת FiveM (/server-status) + חיפוש שחקן (/player-info)
- *      + רשימת שחקנים מחוברים (/server-players) — כולם מתעדכנים אוטומטית
- *   5. שליטה חיה בשרת ה-FiveM: קיק, באן, הסרת באן, שידור הודעה
+ *      + חיבור ל-SQL לשליפת נתוני שחקנים אמיתיים מהדאטהבייס
+ *   5. שליטה חיה בשרת ה-FiveM דרך RCON: קיק, באן, הסרת באן, שידור הודעה
  *   6. מערכת לוגים מלאה (באנים, טיימאאוטים, קיקים, כניסה/יציאה, אימות)
  *   7. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
  *   8. סטטוס בוט דינמי לפי כמות משתמשים בשרת ה-FiveM
  *
- *  🔧 עדכון גרסה 3.0 — מעבר ל"גישור" (Bridge) במקום RCON/SQL ישיר:
- *   • הבוט כבר לא מתחבר ישירות ל-MySQL ולא משתמש ב-RCON (UDP) מול השרת.
- *     במקום זאת, כל התקשורת עם שרת ה-FiveM עוברת דרך משאב ייעודי שרץ
- *     *בתוך* שרת ה-FiveM עצמו (vorino_bridge) וחושף HTTP API מאובטח
- *     במפתח (Bearer token). המשאב הוא זה שניגש ל-ESX/oxmysql באופן
- *     מקומי ומבצע קיק/באן/שידור הודעות באמצעות הפקודות הטבעיות של
- *     FXServer — הרבה יותר בטוח, יציב ופשוט מ-RCON גולמי או מחיבור
- *     SQL חיצוני שנחשף לאינטרנט.
- *   • /player-info, /server-players, /server-status, /server-kick,
- *     /server-ban, /server-unban ו-/server-message כולם קוראים כעת
- *     ל-vorino_bridge (ראו קובץ vorino_bridge/server/main.lua ואת
- *     קובץ ה-README המצורף להוראות התקנה).
+ *  🔧 עדכון גרסה 2.0:
  *   • פאנל סטטוס שרת עוצב מחדש בסגנון כתום-זוהר עשיר יותר (כותרת עם
  *     אימוג'ים, מפרידים ויזואליים, בלוק קוד לכתובת ה-IP:PORT, מד תפוסה
  *     ואחוזים). הפאנל מתעדכן אוטומטית כל דקה, לא רק בלחיצה על רענון.
+ *   • נוספה שכבת RCON מלאה (UDP, פרוטוקול ה-RCON הרשמי של FiveM) לביצוע
+ *     פעולות ניהול אמיתיות על השרת: קיק, באן, הסרת באן ושידור הודעה —
+ *     ישירות מפקודות סלאש בדיסקורד.
+ *   • /player-info משולבת כעת גם עם מסד נתונים (MySQL) של השרת, ומציגה
+ *     נתוני שחקן אמיתיים (כסף, תפקיד, לישן זיהוי וכו') לצד הסטטוס החי.
+ *   • טקסטים עוצבו מחדש לסגנון מקצועי ורציני יותר, עם אלמנטים ויזואליים
+ *     בולטים (🚨 / 💠 / ✨) לשמירה על אופי כתום-זוהר של הבוט.
  * ==========================================================================
  */
 
@@ -59,6 +55,16 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const http = require('http');
+const dgram = require('dgram');
+
+// mysql2 נדרש רק אם הוגדר חיבור למסד נתונים (config.database.host).
+// אם לא הותקן ולא הוגדר חיבור, הבוט ימשיך לעבוד רגיל בלי החלק הזה.
+let mysql = null;
+try {
+  mysql = require('mysql2/promise');
+} catch {
+  console.warn('ℹ️ החבילה mysql2 לא מותקנת — פקודת /player-info תעבוד רק עם נתונים חיים מהשרת, בלי מסד נתונים. הרצה: npm install mysql2');
+}
 
 // --------------------------------------------------------------------------
 // שרת HTTP קטן — נדרש כדי שרנדר (Render) יזהה את השירות כ-"Web Service" חי.
@@ -149,17 +155,38 @@ const config = {
   },
 
   // --------------------------------------------------------------------
-  // גישור לשרת (vorino_bridge) — כל פעולות הניהול החיות (קיק/באן/הסרת
-  // באן/הודעה) וכל שליפת המידע (סטטוס/רשימת שחקנים/כרטיס שחקן) עוברות
-  // דרך משאב ה-FiveM הייעודי "vorino_bridge" שרץ בתוך שרת המשחק עצמו.
-  // הבוט פונה אליו ב-HTTP רגיל על אותה כתובת IP:PORT של השרת (config.fivem),
-  // ומאמת את עצמו עם מפתח ה-API הזה בכותרת Authorization: Bearer <key>.
-  // המפתח חייב להיות זהה למה שהוגדר ב-server.cfg תחת הקונבר vorino_api_key.
-  // ראו את קובץ vorino_bridge/README.md להוראות התקנה מלאות.
+  // RCON — שליטה חיה בשרת ה-FiveM (קיק / באן / הסרת באן / הודעה).
+  // חובה להגדיר rcon_password בקובץ ה-server.cfg של השרת (למשל:
+  // `rcon_password "סיסמה_חזקה_כלשהי"`), ולוודא שהפורט של המשחק פתוח
+  // גם ל-UDP (בדרך כלל אותו פורט כמו port ב-fivem למעלה).
+  // הסיסמה עצמה נטענת אך ורק ממשתנה סביבה — לעולם לא נכתבת כאן בקוד.
   // --------------------------------------------------------------------
-  "fivemApi": {
-    "apiKey": process.env.FIVEM_API_KEY || "",
-    "timeout": 6000
+  "rcon": {
+    "password": process.env.RCON_PASSWORD || "",
+    "port": process.env.RCON_PORT || null, // אם ריק, ייעשה שימוש ב-fivem.port
+    // תבניות הפקודות תלויות במשאבים המותקנים בשרת שלך (אין תקן אחיד ל-FiveM).
+    // אפשר לשנות אותן כאן כדי להתאים למשאב הבאנים/ההודעות שמותקן אצלך.
+    "kickCommandTemplate": process.env.RCON_KICK_TEMPLATE || 'kick {id} "{reason}"',
+    "banCommandTemplate": process.env.RCON_BAN_TEMPLATE || 'txaAddBan {id} "{reason}"',
+    "unbanCommandTemplate": process.env.RCON_UNBAN_TEMPLATE || 'txaRemoveBan {id}',
+    "messageCommandTemplate": process.env.RCON_MESSAGE_TEMPLATE || 'say ^3[הודעת מנהלים]^0 {message}'
+  },
+
+  // --------------------------------------------------------------------
+  // מסד נתונים (MySQL) — לשליפת נתוני שחקנים אמיתיים (כסף, תפקיד וכו')
+  // עבור /player-info. אם host לא הוגדר, החלק הזה פשוט מדולג.
+  // התאימו את שמות הטבלה/העמודות למבנה מסד הנתונים של המסגרת שלכם
+  // (ESX / QBCore / מותאם אישית).
+  // --------------------------------------------------------------------
+  "database": {
+    "host": process.env.DB_HOST || "",
+    "port": process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : 3306,
+    "user": process.env.DB_USER || "",
+    "password": process.env.DB_PASSWORD || "",
+    "name": process.env.DB_NAME || "",
+    "playersTable": process.env.DB_PLAYERS_TABLE || "users",
+    "identifierColumn": process.env.DB_ID_COLUMN || "identifier",
+    "nameColumn": process.env.DB_NAME_COLUMN || "name"
   },
 
   "giveaways": {
@@ -328,60 +355,147 @@ async function sendLog(guild, embed, key = 'logsChannelId') {
 }
 
 // ==========================================================================
-// גישור ל-FiveM (vorino_bridge) — HTTP API מאובטח שרץ בתוך שרת המשחק
+// RCON — שליטה חיה בשרת FiveM (UDP, פרוטוקול RCON הרשמי)
 // ==========================================================================
-// כל התקשורת עם שרת ה-FiveM (סטטוס, רשימת שחקנים, כרטיס שחקן, קיק, באן,
-// הסרת באן, שידור הודעה) עוברת דרך המשאב הייעודי vorino_bridge, שחושף
-// נתיבי HTTP על אותו IP:PORT של השרת (config.fivem.ip / config.fivem.port).
-// זהו HTTP רגיל (לא UDP RCON) ולכן פשוט, יציב, וניתן לניפוי-שגיאות בקלות.
+// FiveM (כמו game-servers מבוססי quake3) מקבל פקודות RCON כחבילת UDP בפורמט:
+//   0xFF 0xFF 0xFF 0xFF  "rcon <password> <command>"
+// והתגובה חוזרת באותו פורמט עם קידומת "print". השכבה הזו לא תלויה בשום
+// משאב חיצוני — רק בהגדרת rcon_password בשרת עצמו.
 // --------------------------------------------------------------------------
-function fivemApiUrl(pathname) {
-  return `http://${config.fivem.ip}:${config.fivem.port}${pathname}`;
-}
+function rconCommand(command, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    if (!config.rcon.password) {
+      return reject(new Error('לא הוגדרה סיסמת RCON (משתנה הסביבה RCON_PASSWORD) — לא ניתן לשלוט בשרת מרחוק.'));
+    }
+    const rconPort = parseInt(config.rcon.port || config.fivem.port, 10);
+    const socket = dgram.createSocket('udp4');
+    const payload = `rcon ${config.rcon.password} ${command}`;
+    const packet = Buffer.concat([Buffer.from([0xff, 0xff, 0xff, 0xff]), Buffer.from(payload, 'utf8')]);
 
-async function fivemApiRequest(method, pathname, body) {
-  if (!config.fivemApi.apiKey) {
-    throw new Error(
-      'לא הוגדר FIVEM_API_KEY במשתני הסביבה — לא ניתן לתקשר עם משאב הגישור (vorino_bridge) בשרת ה-FiveM.'
-    );
-  }
-  let res;
-  try {
-    res = await axios({
-      method,
-      url: fivemApiUrl(pathname),
-      timeout: config.fivemApi.timeout,
-      headers: {
-        Authorization: `Bearer ${config.fivemApi.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      data: body,
-      validateStatus: () => true, // נטפל בקודי סטטוס שגויים בעצמנו למטה
+    const timer = setTimeout(() => {
+      socket.close();
+      reject(new Error('לא התקבלה תגובה מהשרת (RCON timeout). ודא/י שהפורט פתוח ל-UDP ושסיסמת ה-RCON נכונה.'));
+    }, timeoutMs);
+
+    socket.once('message', (msg) => {
+      clearTimeout(timer);
+      socket.close();
+      let text = msg.toString('utf8');
+      text = text.replace(/^\xff\xff\xff\xff(print\n?)?/, '');
+      resolve(text.trim());
     });
+
+    socket.once('error', (err) => {
+      clearTimeout(timer);
+      socket.close();
+      reject(err);
+    });
+
+    socket.send(packet, 0, packet.length, rconPort, config.fivem.ip, (err) => {
+      if (err) {
+        clearTimeout(timer);
+        socket.close();
+        reject(err);
+      }
+    });
+  });
+}
+
+function fillTemplate(template, values) {
+  let out = template;
+  for (const [key, val] of Object.entries(values)) {
+    out = out.split(`{${key}}`).join(String(val));
+  }
+  return out;
+}
+
+async function rconKickPlayer(serverId, reason) {
+  const cmd = fillTemplate(config.rcon.kickCommandTemplate, { id: serverId, reason });
+  return rconCommand(cmd);
+}
+
+async function rconBanPlayer(serverId, reason) {
+  // הפקודה בפועל תלויה במשאב הבאנים המותקן בשרת שלך (למשל txAdmin,
+  // ox_ban, vMenu וכו'). עדכנו את rcon.banCommandTemplate בהתאם.
+  const cmd = fillTemplate(config.rcon.banCommandTemplate, { id: serverId, reason });
+  return rconCommand(cmd);
+}
+
+async function rconUnbanPlayer(banIdentifier) {
+  const cmd = fillTemplate(config.rcon.unbanCommandTemplate, { id: banIdentifier });
+  return rconCommand(cmd);
+}
+
+async function rconBroadcastMessage(message) {
+  const cmd = fillTemplate(config.rcon.messageCommandTemplate, { message });
+  return rconCommand(cmd);
+}
+
+// ==========================================================================
+// מסד נתונים (MySQL) — נתוני שחקנים אמיתיים
+// ==========================================================================
+let dbPool = null;
+
+function getDbPool() {
+  if (!mysql || !config.database.host) return null;
+  if (!dbPool) {
+    dbPool = mysql.createPool({
+      host: config.database.host,
+      port: config.database.port,
+      user: config.database.user,
+      password: config.database.password,
+      database: config.database.name,
+      waitForConnections: true,
+      connectionLimit: 5,
+    });
+  }
+  return dbPool;
+}
+
+// שדות נפוצים במסגרות ESX/QBCore שמוצגים אוטומטית אם הם קיימים בשורה
+// שהתקבלה מהטבלה, כדי להימנע מהצגת עמודות רגישות (סיסמאות/טוקנים).
+const DB_DISPLAY_FIELDS = [
+  ['job', '💼 תפקיד'],
+  ['job_grade', '📈 דרגת תפקיד'],
+  ['group', '👑 קבוצת הרשאה'],
+  ['money', '💵 מזומן'],
+  ['bank', '🏦 בנק'],
+  ['playtime', '⏱️ זמן משחק'],
+  ['last_seen', '👁️ נראה לאחרונה'],
+  ['firstname', '📝 שם פרטי'],
+  ['lastname', '📝 שם משפחה'],
+  ['phone_number', '📱 טלפון'],
+];
+
+async function fetchPlayerFromDatabase(query) {
+  const pool = getDbPool();
+  if (!pool) return null;
+  const table = config.database.playersTable;
+  const idCol = config.database.identifierColumn;
+  const nameCol = config.database.nameColumn;
+  try {
+    const [rows] = await pool.query(
+      `SELECT * FROM \`${table}\` WHERE \`${idCol}\` LIKE ? OR \`${nameCol}\` LIKE ? LIMIT 1`,
+      [`%${query}%`, `%${query}%`]
+    );
+    return rows[0] || null;
   } catch (err) {
-    throw new Error(`לא ניתן להתחבר למשאב הגישור (vorino_bridge) בשרת: ${err.message}`);
+    console.error('שגיאה בשליפת שחקן ממסד הנתונים:', err.message);
+    return null;
   }
-  if (res.status < 200 || res.status >= 300) {
-    const msg = (res.data && res.data.error) || `שגיאת HTTP ${res.status} ממשאב הגישור`;
-    throw new Error(msg);
-  }
-  return res.data;
-}
-
-function fivemApiGet(pathname) {
-  return fivemApiRequest('GET', pathname);
-}
-
-function fivemApiPost(pathname, body) {
-  return fivemApiRequest('POST', pathname, body);
 }
 
 // --------------------------------------------------------------------------
 // FiveM - סטטוס שרת + חיפוש שחקן
 // --------------------------------------------------------------------------
-// המקור הראשי לסטטוס/רשימת שחקנים/כרטיס שחקן הוא vorino_bridge (מקומי,
-// אמין ומהיר). כגיבוי בלבד (רק לספירת שחקנים כלליים, בלי פרטים), אם
-// הגישור לא זמין, יש נפילה חזרה ל-API הרשמי של cfx.re.
+// 🔧 הרבה אחסונים ל-FiveM חוסמים גישה חיצונית ישירה לפורט המשחק (הגנת
+// אנטי-DDoS / פיירוול), מה שגרם לסטטוס "אופליין" גם כששרת פעיל לגמרי.
+//
+// עכשיו השליפה קודם מנסה את ה-API הרשמי של cfx.re (אותו API שמפעיל את
+// כפתור ה-Connect ורשימת השרתים במשחק), לפי קוד ה-join מתוך connectLink.
+// זהו HTTPS רגיל בפורט 443 ולכן לא תלוי בחסימות של פורט המשחק.
+// אם זה נכשל מכל סיבה, יש גיבוי לשאילתה הישנה הישירה מול IP:PORT.
+// כל כשל נרשם ל-console כדי שאפשר יהיה לראות ברנדר (Render) מה קרה בפועל.
 // --------------------------------------------------------------------------
 
 function extractJoinId(link) {
@@ -410,31 +524,57 @@ async function fetchFiveMViaMasterAPI() {
   };
 }
 
-async function fetchFiveMViaBridge() {
-  const data = await fivemApiGet('/vorino/status');
+async function fetchFiveMPlayers() {
+  const url = `http://${config.fivem.ip}:${config.fivem.port}/players.json`;
+  const res = await axios.get(url, { timeout: 5000 });
+  return res.data; // array of players
+}
+
+async function fetchFiveMInfo() {
+  const url = `http://${config.fivem.ip}:${config.fivem.port}/info.json`;
+  const res = await axios.get(url, { timeout: 5000 });
+  return res.data;
+}
+
+async function fetchFiveMViaDirectIP() {
+  const [players, info] = await Promise.all([fetchFiveMPlayers(), fetchFiveMInfo()]);
+  const maxPlayers =
+    (info.vars && (info.vars.sv_maxclients || info.vars['sv_maxClients'])) || players.length;
   return {
     online: true,
-    count: data.count,
-    max: data.max,
-    hostname: data.hostname || 'FiveM Server',
+    players,
+    count: players.length,
+    max: parseInt(maxPlayers, 10) || players.length,
+    hostname: (info.vars && info.vars.sv_projectName) || info.serverversion || 'FiveM Server',
   };
 }
 
 async function getFiveMStatus() {
-  // ניסיון ראשון: משאב הגישור (vorino_bridge) — מקומי, מהיר ומדויק
-  try {
-    return await fetchFiveMViaBridge();
-  } catch (err) {
-    console.warn('⚠️ נכשל שליפת סטטוס דרך משאב הגישור (vorino_bridge):', err.message);
-  }
-
-  // ניסיון שני (גיבוי בלבד, ספירה כללית ללא פרטי שחקנים): ה-API הרשמי של cfx.re
+  // ניסיון ראשון: ה-API הרשמי של FiveM (עובד גם אם השרת חוסם גישה ישירה ל-IP:port)
   try {
     return await fetchFiveMViaMasterAPI();
   } catch (err) {
     console.warn('⚠️ נכשל שליפת סטטוס FiveM דרך API הרשמי (cfx.re):', err.message);
+  }
+
+  // ניסיון שני (גיבוי): שאילתה ישירה מול players.json / info.json
+  try {
+    return await fetchFiveMViaDirectIP();
+  } catch (err) {
+    console.warn('⚠️ נכשל שליפת סטטוס FiveM ישירות מה-IP:', err.message);
     return { online: false };
   }
+}
+
+function findPlayerInList(players, query) {
+  const q = query.toLowerCase().trim();
+  return players.find((p) => {
+    if (p.name && p.name.toLowerCase().includes(q)) return true;
+    if (Array.isArray(p.identifiers)) {
+      return p.identifiers.some((id) => id.toLowerCase().includes(q));
+    }
+    return false;
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -1711,44 +1851,46 @@ async function handleSlashCommand(interaction) {
       const query = options.getString('query');
       await interaction.deferReply();
 
-      let data;
-      try {
-        data = await fivemApiGet(`/vorino/player?query=${encodeURIComponent(query)}`);
-      } catch (err) {
+      const status = await getFiveMStatus();
+      const livePlayer = status.online ? findPlayerInList(status.players, query) : null;
+      const dbPlayer = await fetchPlayerFromDatabase(query);
+
+      if (!livePlayer && !dbPlayer) {
         return interaction.editReply({
-          embeds: [errorEmbed('שחקן לא נמצא', `לא נמצא שחקן התואם ל: "${query}".\n${err.message}`)],
+          embeds: [errorEmbed('שחקן לא נמצא', `לא נמצא שחקן התואם ל: "${query}" — לא באונליין ולא במסד הנתונים.`)],
         });
       }
 
-      const e = baseEmbed().setTitle(`🎮 כרטיס שחקן: ${data.name || [data.firstName, data.lastName].filter(Boolean).join(' ') || query}`);
+      const e = baseEmbed().setTitle(`🎮 כרטיס שחקן: ${(livePlayer && livePlayer.name) || (dbPlayer && dbPlayer[config.database.nameColumn]) || query}`);
 
-      if (data.online) {
-        const discordId = (data.identifiers || []).find((id) => id.startsWith('discord:'));
+      if (livePlayer) {
+        const discordId = (livePlayer.identifiers || []).find((id) => id.startsWith('discord:'));
         e.addFields(
           { name: '📶 סטטוס', value: '```diff\n+ מחובר כעת\n```', inline: false },
-          { name: '🆔 מזהה שרת', value: `${data.id}`, inline: true },
-          { name: '📡 פינג', value: `${data.ping}ms`, inline: true },
+          { name: '🆔 מזהה שרת', value: `${livePlayer.id}`, inline: true },
+          { name: '📡 פינג', value: `${livePlayer.ping}ms`, inline: true },
           { name: '💬 דיסקורד', value: discordId ? `<@${discordId.split(':')[1]}>` : 'לא מקושר', inline: true }
         );
       } else {
         e.addFields({ name: '📶 סטטוס', value: '```diff\n- לא מחובר כרגע\n```', inline: false });
       }
 
-      const fieldsMap = [
-        ['jobLabel', '💼 תפקיד'],
-        ['jobGrade', '📈 דרגת תפקיד'],
-        ['money', '💵 מזומן'],
-        ['bank', '🏦 בנק'],
-        ['firstName', '📝 שם פרטי'],
-        ['lastName', '📝 שם משפחה'],
-        ['playtime', '⏱️ זמן משחק'],
-      ];
-      const lines = [];
-      for (const [key, label] of fieldsMap) {
-        if (data[key] !== undefined && data[key] !== null && data[key] !== '') lines.push(`**${label}:** ${data[key]}`);
+      if (dbPlayer) {
+        const dbLines = [];
+        for (const [col, label] of DB_DISPLAY_FIELDS) {
+          if (dbPlayer[col] !== undefined && dbPlayer[col] !== null) {
+            dbLines.push(`**${label}:** ${dbPlayer[col]}`);
+          }
+        }
+        if (dbLines.length) {
+          e.addFields({ name: '🗄️ נתוני מסד הנתונים', value: dbLines.join('\n').slice(0, 1024) });
+        }
+        if (dbPlayer[config.database.identifierColumn]) {
+          e.addFields({ name: '🔑 זיהוי (Identifier)', value: `\`${dbPlayer[config.database.identifierColumn]}\`` });
+        }
+      } else if (!getDbPool()) {
+        e.addFields({ name: '🗄️ מסד נתונים', value: 'לא הוגדר חיבור למסד נתונים — מוצג רק מידע חי מהשרת.' });
       }
-      if (lines.length) e.addFields({ name: '🗄️ נתונים נוספים', value: lines.join('\n').slice(0, 1024) });
-      if (data.identifier) e.addFields({ name: '🔑 זיהוי (Identifier)', value: `\`${data.identifier}\`` });
 
       await interaction.editReply({ embeds: [e] });
       break;
@@ -1756,22 +1898,16 @@ async function handleSlashCommand(interaction) {
 
     case 'server-players': {
       await interaction.deferReply();
-      let data;
-      try {
-        data = await fivemApiGet('/vorino/players');
-      } catch (err) {
-        return interaction.editReply({ embeds: [errorEmbed('השרת לא מחובר', `לא ניתן היה לקבל רשימת שחקנים ממשאב הגישור: ${err.message}`)] });
+      const status = await getFiveMStatus();
+      if (!status.online) {
+        return interaction.editReply({ embeds: [errorEmbed('השרת לא מחובר', 'לא ניתן להתחבר לשרת ה-FiveM כרגע.')] });
       }
-      const players = data.players || [];
-      if (!players.length) {
+      if (!status.players.length) {
         return interaction.editReply({ embeds: [infoEmbed('אין שחקנים', 'אין כרגע שחקנים מחוברים לשרת.')] });
       }
-      const list = players
-        .slice(0, 30)
-        .map((p) => `**${p.id}.** ${p.name} — ${p.ping}ms${p.jobLabel ? ` — 💼 ${p.jobLabel}` : ''}`)
-        .join('\n');
+      const list = status.players.slice(0, 30).map((p) => `**${p.id}.** ${p.name} — ${p.ping}ms`).join('\n');
       await interaction.editReply({
-        embeds: [infoEmbed(`👥 שחקנים מחוברים (${players.length})`, list)],
+        embeds: [infoEmbed(`👥 שחקנים מחוברים (${status.count}/${status.max})`, list)],
       });
       break;
     }
@@ -1782,7 +1918,7 @@ async function handleSlashCommand(interaction) {
       const reason = options.getString('reason') || 'לא צוינה סיבה';
       await interaction.deferReply();
       try {
-        await fivemApiPost('/vorino/kick', { id: serverId, reason });
+        await rconKickPlayer(serverId, reason);
         await interaction.editReply({ embeds: [successEmbed('🚨 שחקן סולק מהשרת', `שחקן במזהה **${serverId}** סולק מהשרת בזמן אמת.\n**סיבה:** ${reason}`)] });
         await sendLog(guild, warningEmbed('🚨 קיק משרת FiveM', `**מזהה שחקן:** ${serverId}\n**מפעיל:** ${interaction.user}\n**סיבה:** ${reason}`), 'modLogsChannelId');
       } catch (err) {
@@ -1797,13 +1933,11 @@ async function handleSlashCommand(interaction) {
       const reason = options.getString('reason');
       await interaction.deferReply();
       try {
-        const result = await fivemApiPost('/vorino/ban', { id: serverId, reason, bannedBy: interaction.user.tag });
-        await interaction.editReply({
-          embeds: [successEmbed('🚨 שחקן נחסם בשרת', `שחקן במזהה **${serverId}** נחסם בשרת בזמן אמת.\n**סיבה:** ${reason}\n**זיהוי שנחסם:** \`${result.identifier || 'לא ידוע'}\``)],
-        });
+        await rconBanPlayer(serverId, reason);
+        await interaction.editReply({ embeds: [successEmbed('🚨 שחקן נחסם בשרת', `שחקן במזהה **${serverId}** נחסם בשרת בזמן אמת.\n**סיבה:** ${reason}`)] });
         await sendLog(guild, errorEmbed('🚨 באן משרת FiveM', `**מזהה שחקן:** ${serverId}\n**מפעיל:** ${interaction.user}\n**סיבה:** ${reason}`), 'modLogsChannelId');
       } catch (err) {
-        await interaction.editReply({ embeds: [errorEmbed('שגיאה בביצוע החסימה', err.message)] });
+        await interaction.editReply({ embeds: [errorEmbed('שגיאה בביצוע החסימה', `${err.message}\n\nייתכן שיש להתאים את תבנית הפקודה \`rcon.banCommandTemplate\` למשאב הבאנים המותקן בשרת שלך.`)] });
       }
       break;
     }
@@ -1813,11 +1947,11 @@ async function handleSlashCommand(interaction) {
       const identifier = options.getString('identifier');
       await interaction.deferReply();
       try {
-        await fivemApiPost('/vorino/unban', { identifier });
+        await rconUnbanPlayer(identifier);
         await interaction.editReply({ embeds: [successEmbed('✅ החסימה הוסרה בשרת', `הוסרה חסימה עבור **${identifier}**.`)] });
         await sendLog(guild, successEmbed('✅ הסרת באן משרת FiveM', `**זיהוי:** ${identifier}\n**מפעיל:** ${interaction.user}`), 'modLogsChannelId');
       } catch (err) {
-        await interaction.editReply({ embeds: [errorEmbed('שגיאה בהסרת החסימה', err.message)] });
+        await interaction.editReply({ embeds: [errorEmbed('שגיאה בהסרת החסימה', `${err.message}\n\nייתכן שיש להתאים את תבנית הפקודה \`rcon.unbanCommandTemplate\` למשאב הבאנים המותקן בשרת שלך.`)] });
       }
       break;
     }
@@ -1827,7 +1961,7 @@ async function handleSlashCommand(interaction) {
       const msgText = options.getString('message');
       await interaction.deferReply();
       try {
-        await fivemApiPost('/vorino/message', { message: msgText });
+        await rconBroadcastMessage(msgText);
         await interaction.editReply({ embeds: [successEmbed('📢 ההודעה שודרה', `ההודעה נשלחה לכלל השחקנים המחוברים בשרת:\n\n> ${msgText}`)] });
         await sendLog(guild, infoEmbed('📢 שידור הודעה לשרת FiveM', `**תוכן:** ${msgText}\n**מפעיל:** ${interaction.user}`));
       } catch (err) {
