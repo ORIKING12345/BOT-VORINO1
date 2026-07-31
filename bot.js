@@ -15,19 +15,14 @@
  *   7. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
  *   8. סטטוס בוט דינמי לפי כמות משתמשים בשרת ה-FiveM
  *
- *  🔧 עדכון גרסה 2.0:
- *   • פאנל סטטוס שרת עוצב מחדש בסגנון כתום-זוהר עשיר יותר (כותרת עם
- *     אימוג'ים, מפרידים ויזואליים, בלוק קוד לכתובת ה-IP:PORT, מד תפוסה
- *     ואחוזים). הפאנל מתעדכן אוטומטית כל דקה, לא רק בלחיצה על רענון.
- *   • נוספה שכבת "Vorino Bridge" — תקשורת HTTP מאובטחת (עם סיסמה
- *     משותפת) מול משאב Lua ייעודי שרץ בתוך שרת ה-FiveM עצמו, לביצוע
- *     פעולות ניהול אמיתיות: קיק, באן, הסרת באן ושידור הודעה — ישירות
- *     מפקודות סלאש בדיסקורד. כל בקשה ותגובה נרשמות ללוג.
- *   • /player-info משולבת כעת גם עם מסד נתונים (טבלת Gamers), שנשלף
- *     ישירות דרך Vorino Bridge בתוך שרת ה-FiveM — הבוט עצמו לא מתחבר
- *     למסד הנתונים בכלל, כך שאין צורך לחשוף אותו כלפי חוץ.
- *   • טקסטים עוצבו מחדש לסגנון מקצועי ורציני יותר, עם אלמנטים ויזואליים
- *     בולטים (🚨 / 💠 / ✨) לשמירה על אופי כתום-זוהר של הבוט.
+ *  🔧 עדכון גרסה 2.1 (תיקון סטטוס שרת):
+ *   • ה-API הרשמי של cfx.re (servers-frontend.fivem.net) חסום כעת (403)
+ *     לבקשות סקריפטים ולא נתמך יותר לשימוש חיצוני. הוסר משימוש קבוע.
+ *   • שיטת השליפה הישירה מול IP:PORT (players.json/info.json) עדיין
+ *     נשמרת כגיבוי, אך ברוב האחסונים חסומה ע"י אנטי-DDoS לתעבורה נכנסת.
+ *   • נוסף מנגנון "Heartbeat": שרת ה-FiveM עצמו שולח (outbound, לא חסום)
+ *     עדכון סטטוס לבוט כל 30 שניות דרך משאב Lua נפרד (vorino_status),
+ *     והבוט שומר את זה בזיכרון ומציג אותו בפאנל. זו כעת שיטת ברירת המחדל.
  * ==========================================================================
  */
 
@@ -60,12 +55,49 @@ const axios = require('axios');
 const http = require('http');
 
 // --------------------------------------------------------------------------
-// שרת HTTP קטן — נדרש כדי שרנדר (Render) יזהה את השירות כ-"Web Service" חי.
-// רנדר בודק פינג על הפורט הזה כדי לוודא שהתהליך לא קרס.
+// שרת HTTP — משמש גם ל-keepalive של Render וגם לקבלת "heartbeat" סטטוס
+// מהשרת FiveM עצמו. במקום שהבוט ינסה לגשת פנימה לשרת (תעבורה נכנסת שכמעט
+// תמיד חסומה ע"י האנטי-DDoS של האחסון), שרת ה-FiveM שולח החוצה (outbound,
+// כמעט אף פעם לא חסום) עדכון סטטוס כל 30 שניות. ראו משאב vorino_status.
 // --------------------------------------------------------------------------
+let cachedFivemStatus = null; // { online, hostname, count, max, players, receivedAt }
+const HEARTBEAT_STALE_MS = 90 * 1000; // אם לא הגיע heartbeat תוך 90 שניות -> אופליין
+
 const PORT = process.env.PORT || 3000;
 http
   .createServer((req, res) => {
+    if (req.method === 'POST' && req.url === '/vorino/heartbeat') {
+      const secret = process.env.VORINO_BRIDGE_SECRET || '';
+      if (!secret || req.headers['x-vorino-secret'] !== secret) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+      }
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 1e6) req.destroy(); // הגנה מפני payload ענק
+      });
+      req.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          cachedFivemStatus = {
+            online: true,
+            hostname: data.hostname || 'FiveM Server',
+            count: Number(data.count) || 0,
+            max: Number(data.max) || 0,
+            players: Array.isArray(data.players) ? data.players : [],
+            receivedAt: Date.now(),
+          };
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+        }
+      });
+      return;
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(
       client.isReady && client.isReady()
@@ -73,7 +105,7 @@ http
         : '🔄 הבוט עולה כרגע...\n'
     );
   })
-  .listen(PORT, () => console.log(`🌐 HTTP keepalive server מאזין על פורט ${PORT}`));
+  .listen(PORT, () => console.log(`🌐 HTTP keepalive/heartbeat server מאזין על פורט ${PORT}`));
 
 // ==========================================================================
 // הגדרות (CONFIG) — ה-IDs נטענים ממשתני סביבה (Render → Environment) כשהם
@@ -140,8 +172,7 @@ const config = {
   "fivem": {
     "ip": "191.96.229.83",
     "port": "30120",
-    // חייב להיות קישור אמיתי (URL) שמתחיל ב-http:// או https:// כדי שכפתור ה-Link בדיסקורד יעבוד,
-    // וגם כדי שנוכל לחלץ ממנו את קוד ה-join לשליפה דרך ה-API הרשמי של cfx.re.
+    // חייב להיות קישור אמיתי (URL) שמתחיל ב-http:// או https:// כדי שכפתור ה-Link בדיסקורד יעבוד.
     "connectLink": "https://cfx.re/join/rmmg7ej",
     // אופציונלי - אם אין חנות, השאירו מחרוזת ריקה ("") והכפתור פשוט לא יופיע.
     "storeLink": ""
@@ -154,6 +185,9 @@ const config = {
   //   ensure vorino_bridge
   //   setr vorino_secret "אותה_סיסמה_בדיוק_כמו_VORINO_BRIDGE_SECRET"
   // הסיסמה עצמה נטענת אך ורק ממשתנה סביבה — לעולם לא נכתבת כאן בקוד.
+  // שימו לב: אם האחסון חוסם תעבורה נכנסת לפורט המשחק (כמו שקורה עם
+  // players.json/info.json), גם הבריאג' הזה עלול להיכשל מאותה סיבה.
+  // ראו משאב vorino_status לפתרון מבוסס heartbeat יוצא לגבי סטטוס בלבד.
   // --------------------------------------------------------------------
   "bridge": {
     "secret": process.env.VORINO_BRIDGE_SECRET || "",
@@ -336,6 +370,8 @@ async function sendLog(guild, embed, key = 'logsChannelId') {
 // X-Vorino-Secret שחייבת להתאים בדיוק לסיסמה שהוגדרה גם בשרת (vorino_secret)
 // וגם כאן אצל הבוט (VORINO_BRIDGE_SECRET). כל בקשה ותגובה נרשמות ל-console
 // כדי שיהיה אפשר לעקוב אחרי כל פעולה שמתבצעת מול השרת.
+// שימו לב: פונקציות אלו דורשות תעבורה *נכנסת* לשרת ה-FiveM. אם האחסון
+// חוסם זאת (כמו שקורה עם סטטוס השרת), גם הפקודות האלו ייכשלו בטיימאאוט.
 // --------------------------------------------------------------------------
 async function bridgeRequest(path, body, timeoutMs = 6000) {
   if (!config.bridge.secret) {
@@ -407,41 +443,10 @@ async function fetchPlayerFromDatabase(query) {
 // --------------------------------------------------------------------------
 // FiveM - סטטוס שרת + חיפוש שחקן
 // --------------------------------------------------------------------------
-// 🔧 הרבה אחסונים ל-FiveM חוסמים גישה חיצונית ישירה לפורט המשחק (הגנת
-// אנטי-DDoS / פיירוול), מה שגרם לסטטוס "אופליין" גם כששרת פעיל לגמרי.
-//
-// עכשיו השליפה קודם מנסה את ה-API הרשמי של cfx.re (אותו API שמפעיל את
-// כפתור ה-Connect ורשימת השרתים במשחק), לפי קוד ה-join מתוך connectLink.
-// זהו HTTPS רגיל בפורט 443 ולכן לא תלוי בחסימות של פורט המשחק.
-// אם זה נכשל מכל סיבה, יש גיבוי לשאילתה הישנה הישירה מול IP:PORT.
-// כל כשל נרשם ל-console כדי שאפשר יהיה לראות ברנדר (Render) מה קרה בפועל.
+// שיטת שליפה ישירה (גיבוי בלבד) - עובדת רק אם האחסון מאפשר תעבורה נכנסת
+// לפורט המשחק. ברוב האחסונים זה חסום ע"י אנטי-DDoS, ולכן שיטת ברירת
+// המחדל היא ה-heartbeat (ראו cachedFivemStatus למעלה + משאב vorino_status).
 // --------------------------------------------------------------------------
-
-function extractJoinId(link) {
-  if (!link) return null;
-  const match = /cfx\.re\/join\/([a-zA-Z0-9]+)/i.exec(link);
-  return match ? match[1] : null;
-}
-
-async function fetchFiveMViaMasterAPI() {
-  const joinId = extractJoinId(config.fivem.connectLink);
-  if (!joinId) throw new Error('אין קוד cfx.re תקין ב-connectLink');
-  const url = `https://servers-frontend.fivem.net/api/servers/single/${joinId}`;
-  const res = await axios.get(url, { timeout: 6000 });
-  const data = res.data && res.data.Data;
-  if (!data) throw new Error('לא התקבל מידע מה-API הרשמי של FiveM (ייתכן שהשרת לא רשום ברשימת cfx.re)');
-  const players = data.players || [];
-  return {
-    online: true,
-    players,
-    count: typeof data.clients === 'number' ? data.clients : players.length,
-    max:
-      parseInt(data.sv_maxclients, 10) ||
-      parseInt(data.vars && data.vars.sv_maxclients, 10) ||
-      players.length,
-    hostname: data.hostname || (data.vars && data.vars.sv_projectName) || 'FiveM Server',
-  };
-}
 
 async function fetchFiveMPlayers() {
   const url = `http://${config.fivem.ip}:${config.fivem.port}/players.json`;
@@ -469,18 +474,19 @@ async function fetchFiveMViaDirectIP() {
 }
 
 async function getFiveMStatus() {
-  // ניסיון ראשון: ה-API הרשמי של FiveM (עובד גם אם השרת חוסם גישה ישירה ל-IP:port)
-  try {
-    return await fetchFiveMViaMasterAPI();
-  } catch (err) {
-    console.warn('⚠️ נכשל שליפת סטטוס FiveM דרך API הרשמי (cfx.re):', err.message);
+  // עדיפות ראשונה: heartbeat שהתקבל מה-FiveM server עצמו (תעבורה יוצאת,
+  // כמעט אף פעם לא חסומה ע"י אנטי-DDoS) - ראו משאב vorino_status.
+  if (cachedFivemStatus && Date.now() - cachedFivemStatus.receivedAt < HEARTBEAT_STALE_MS) {
+    return cachedFivemStatus;
   }
 
-  // ניסיון שני (גיבוי): שאילתה ישירה מול players.json / info.json
+  // גיבוי: ניסיון ישיר מול IP:PORT - יעבוד רק אם האחסון לא חוסם תעבורה נכנסת
   try {
     return await fetchFiveMViaDirectIP();
   } catch (err) {
-    console.warn('⚠️ נכשל שליפת סטטוס FiveM ישירות מה-IP:', err.message);
+    const status = err.response ? err.response.status : null;
+    const code = err.code || null;
+    console.warn(`⚠️ נכשל שליפת סטטוס FiveM ישירות מה-IP. status=${status} code=${code} msg=${err.message}`);
     return { online: false };
   }
 }
@@ -1505,14 +1511,6 @@ const slashCommands = [
 // --------------------------------------------------------------------------
 // רישום פקודות סלאש — סנכרון מלא מול דיסקורד
 // --------------------------------------------------------------------------
-// שימוש ב-PUT (ולא POST) הוא קריטי: PUT מחליף את *כל* רשימת הפקודות
-// הרשומות בגילדה בבת אחת ברשימה שאנחנו שולחים כאן. המשמעות היא שכל
-// פקודה שהייתה רשומה בדיסקורד בעבר אך כבר לא מופיעה במערך slashCommands
-// למעלה — תימחק אוטומטית על ידי דיסקורד עצמו, בלי שצריך לעשות שום דבר
-// ידני. כדי לוודא בבירור מה קרה בכל עלייה, אנחנו משווים בין הפקודות
-// שהיו רשומות קודם לבין מה ש-PUT מחזיר, ומדפיסים בדיוק אילו פקודות
-// נוספו ואילו הוסרו.
-// --------------------------------------------------------------------------
 async function registerSlashCommands() {
   const rest = new REST({ version: '10' }).setToken(config.token);
   try {
@@ -2235,7 +2233,6 @@ async function handlePrefixCommand(message) {
 
 // --------------------------------------------------------------------------
 // בדיקת הרשאות הבוט + מיקומו בהיררכיית הרולים
-// רץ אוטומטית בעליית הבוט, ומדפיס/שולח ללוגים בדיוק מה חסר ומה לתקן
 // --------------------------------------------------------------------------
 async function checkBotPermissions(guild) {
   const me = guild.members.me || (await guild.members.fetchMe().catch(() => null));
@@ -2317,7 +2314,7 @@ async function checkBotPermissions(guild) {
   }
 
   if (!config.bridge.secret) {
-    console.warn('⚠️ VORINO_BRIDGE_SECRET לא הוגדר — פקודות server-kick / server-ban / server-unban / server-message ו-/player-info (חלק ה-SQL) לא יעבדו עד שתגדירו אותו (ואת אותה סיסמה בדיוק ב-server.cfg תחת vorino_secret).');
+    console.warn('⚠️ VORINO_BRIDGE_SECRET לא הוגדר — פקודות server-kick / server-ban / server-unban / server-message ו-/player-info (חלק ה-SQL), וכן ה-heartbeat של הסטטוס, לא יעבדו עד שתגדירו אותו (ואת אותה סיסמה בדיוק גם בצד ה-Lua).');
   }
 
   if (warnLines.length) {
