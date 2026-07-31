@@ -11,7 +11,8 @@
     "discord.js": "^14.14.1",
     "dotenv": "^16.4.5",
     "firebase": "^10.8.0",
-    "firebase-admin": "^12.0.0"
+    "firebase-admin": "^12.0.0",
+    "fivem-api": "^1.4.1"
   },
   "engines": {
     "node": ">=18.0.0"
