@@ -7,14 +7,9 @@
  *      נבחרת, סגירה עם טרנסקריפט)
  *   2. מערכת אימות בכפתור (רול מיידי)
  *   3. מערכת הגרלות (כפתור כניסה, ספירת משתתפים, בחירת זוכים אוטומטית)
- *   4. מערכת סטטוס שרת FiveM (/server-status) + חיפוש שחקן (/player-info)
- *   5. מערכת לוגים מלאה (באנים, טיימאאוטים, קיקים, כניסה/יציאה, אימות)
- *   6. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
- *   7. סטטוס בוט דינמי לפי כמות משתמשים בשרת ה-FiveM
- *
- *  🔧 עדכון אחרון: תוקנה שליפת סטטוס ה-FiveM — כעת נשלף דרך ה-API הרשמי
- *  של cfx.re (לפי קוד ה-join), עם גיבוי לשאילתה ישירה מול IP:PORT ורישום
- *  שגיאות אמיתי ללוג, כדי שסטטוס "אופליין" לא יוצג בטעות כששרת בעצם אונליין.
+ *   4. מערכת לוגים מלאה (באנים, טיימאאוטים, קיקים, כניסה/יציאה, אימות)
+ *   5. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
+ *   6. סטטוס בוט דינמי המציג "Watching" את כמות החברים בשרת הדיסקורד
  * ==========================================================================
  */
 
@@ -43,7 +38,6 @@ const {
 
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios');
 const http = require('http');
 
 // --------------------------------------------------------------------------
@@ -122,16 +116,6 @@ const config = {
       { "label": "תודה על הפנייה", "value": "thanks", "text": "שלום, תודה שפנית אלינו! איך אני יכול/ה לסייע לך היום?" },
       { "label": "בבדיקה", "value": "checking", "text": "הצוות קיבל את הפנייה שלך ואנחנו בודקים אותה כרגע, נעדכן בקרוב 🔎" }
     ]
-  },
-
-  "fivem": {
-    "ip": "191.96.229.83",
-    "port": "30120",
-    // חייב להיות קישור אמיתי (URL) שמתחיל ב-http:// או https:// כדי שכפתור ה-Link בדיסקורד יעבוד,
-    // וגם כדי שנוכל לחלץ ממנו את קוד ה-join לשליפה דרך ה-API הרשמי של cfx.re.
-    "connectLink": "https://cfx.re/join/rmmg7ej",
-    // אופציונלי - אם אין חנות, השאירו מחרוזת ריקה ("") והכפתור פשוט לא יופיע.
-    "storeLink": ""
   },
 
   "giveaways": {
@@ -299,168 +283,23 @@ async function sendLog(guild, embed, key = 'logsChannelId') {
 }
 
 // --------------------------------------------------------------------------
-// FiveM - סטטוס שרת + חיפוש שחקן
-// --------------------------------------------------------------------------
-// 🔧 תיקון: הרבה אחסונים ל-FiveM חוסמים גישה חיצונית ישירה לפורט המשחק
-// (הגנת אנטי-DDoS / פיירוול), מה שגרם לסטטוס "אופליין" גם כששרת פעיל
-// לגמרי — וזה נכשל בשקט כי השגיאה האמיתית לא נרשמה בשום מקום.
-//
-// עכשיו השליפה קודם מנסה את ה-API הרשמי של cfx.re (אותו API שמפעיל את
-// כפתור ה-Connect ורשימת השרתים במשחק), לפי קוד ה-join מתוך connectLink.
-// זהו HTTPS רגיל בפורט 443 ולכן לא תלוי בחסימות של פורט המשחק.
-// אם זה נכשל מכל סיבה, יש גיבוי לשאילתה הישנה הישירה מול IP:PORT.
-// כל כשל נרשם ל-console כדי שאפשר יהיה לראות ברנדר (Render) מה קרה בפועל.
-// --------------------------------------------------------------------------
-
-function extractJoinId(link) {
-  if (!link) return null;
-  const match = /cfx\.re\/join\/([a-zA-Z0-9]+)/i.exec(link);
-  return match ? match[1] : null;
-}
-
-async function fetchFiveMViaMasterAPI() {
-  const joinId = extractJoinId(config.fivem.connectLink);
-  if (!joinId) throw new Error('אין קוד cfx.re תקין ב-connectLink');
-  const url = `https://servers-frontend.fivem.net/api/servers/single/${joinId}`;
-  const res = await axios.get(url, { timeout: 6000 });
-  const data = res.data && res.data.Data;
-  if (!data) throw new Error('לא התקבל מידע מה-API הרשמי של FiveM (ייתכן שהשרת לא רשום ברשימת cfx.re)');
-  const players = data.players || [];
-  return {
-    online: true,
-    players,
-    count: typeof data.clients === 'number' ? data.clients : players.length,
-    max:
-      parseInt(data.sv_maxclients, 10) ||
-      parseInt(data.vars && data.vars.sv_maxclients, 10) ||
-      players.length,
-    hostname: data.hostname || (data.vars && data.vars.sv_projectName) || 'FiveM Server',
-  };
-}
-
-async function fetchFiveMPlayers() {
-  const url = `http://${config.fivem.ip}:${config.fivem.port}/players.json`;
-  const res = await axios.get(url, { timeout: 5000 });
-  return res.data; // array of players
-}
-
-async function fetchFiveMInfo() {
-  const url = `http://${config.fivem.ip}:${config.fivem.port}/info.json`;
-  const res = await axios.get(url, { timeout: 5000 });
-  return res.data;
-}
-
-async function fetchFiveMViaDirectIP() {
-  const [players, info] = await Promise.all([fetchFiveMPlayers(), fetchFiveMInfo()]);
-  const maxPlayers =
-    (info.vars && (info.vars.sv_maxclients || info.vars['sv_maxClients'])) || players.length;
-  return {
-    online: true,
-    players,
-    count: players.length,
-    max: parseInt(maxPlayers, 10) || players.length,
-    hostname: (info.vars && info.vars.sv_projectName) || info.serverversion || 'FiveM Server',
-  };
-}
-
-async function getFiveMStatus() {
-  // ניסיון ראשון: ה-API הרשמי של FiveM (עובד גם אם השרת חוסם גישה ישירה ל-IP:port)
-  try {
-    return await fetchFiveMViaMasterAPI();
-  } catch (err) {
-    console.warn('⚠️ נכשל שליפת סטטוס FiveM דרך API הרשמי (cfx.re):', err.message);
-  }
-
-  // ניסיון שני (גיבוי): שאילתה ישירה מול players.json / info.json
-  try {
-    return await fetchFiveMViaDirectIP();
-  } catch (err) {
-    console.warn('⚠️ נכשל שליפת סטטוס FiveM ישירות מה-IP:', err.message);
-    return { online: false };
-  }
-}
-
-function findPlayerInList(players, query) {
-  const q = query.toLowerCase().trim();
-  return players.find((p) => {
-    if (p.name && p.name.toLowerCase().includes(q)) return true;
-    if (Array.isArray(p.identifiers)) {
-      return p.identifiers.some((id) => id.toLowerCase().includes(q));
-    }
-    return false;
-  });
-}
-
-// --------------------------------------------------------------------------
-// עדכון סטטוס בוט לפי מצב שרת ה-FiveM
+// עדכון סטטוס בוט — מציג "Watching" את כמות החברים הנוכחית בשרת הדיסקורד
 // --------------------------------------------------------------------------
 async function updateBotPresence() {
-  const status = await getFiveMStatus();
-  if (!status.online) {
+  try {
+    const guild = await client.guilds.fetch(config.guildId).catch(() => null);
+    if (!guild) return;
+    // נטען מחדש את מונה החברים המדויק (memberCount מהקאש עלול להיות לא מעודכן)
+    const freshGuild = await guild.fetch().catch(() => guild);
+    const memberCount = freshGuild.memberCount;
+
     client.user.setPresence({
-      activities: [{ name: 'Server Offline ❌', type: ActivityType.Watching }],
-      status: 'dnd',
+      activities: [{ name: `${memberCount} חברים בשרת`, type: ActivityType.Watching }],
+      status: 'online',
     });
-    return;
+  } catch (err) {
+    console.error('שגיאה בעדכון סטטוס הבוט:', err);
   }
-  client.user.setPresence({
-    activities: [{ name: `${status.count}/${status.max} שחקנים באונליין 🟧`, type: ActivityType.Watching }],
-    status: 'online',
-  });
-}
-
-// --------------------------------------------------------------------------
-// עיצוב פאנל סטטוס שרת FiveM — עם פס התקדמות ויזואלי לכמות השחקנים
-// --------------------------------------------------------------------------
-function buildPlayerProgressBar(count, max, length = 14) {
-  const safeMax = max > 0 ? max : Math.max(count, 1);
-  const ratio = Math.min(count / safeMax, 1);
-  const filled = Math.round(ratio * length);
-  const empty = length - filled;
-  return '🟧'.repeat(filled) + '⬛'.repeat(empty);
-}
-
-function buildServerStatusEmbed(status) {
-  if (!status.online) {
-    return baseEmbed()
-      .setColor(COLORS.danger)
-      .setTitle('🔴 השרת לא מחובר')
-      .setDescription('לא ניתן להתחבר כרגע לשרת ה-FiveM. ייתכן שהשרת בפעולות תחזוקה או כבוי זמנית.')
-      .addFields({ name: '📶 סטטוס', value: 'Offline ❌', inline: true });
-  }
-
-  const bar = buildPlayerProgressBar(status.count, status.max);
-  const percent = status.max > 0 ? Math.round((status.count / status.max) * 100) : 0;
-
-  return baseEmbed()
-    .setColor(COLORS.primary)
-    .setTitle(`🟢 ${status.hostname}`)
-    .setDescription('השרת פעיל ומחובר! 🧡')
-    .addFields(
-      { name: '👥 שחקנים מחוברים', value: `**${status.count} / ${status.max}** (${percent}%)`, inline: false },
-      { name: '📊 תפוסה', value: bar, inline: false },
-      { name: '📶 סטטוס', value: 'Online ✅', inline: true },
-      { name: '🌐 כתובת', value: `\`${config.fivem.ip}:${config.fivem.port}\``, inline: true }
-    );
-}
-
-function buildServerStatusRow() {
-  const components = [
-    new ButtonBuilder().setLabel('🚀 הצטרפות מהירה').setStyle(ButtonStyle.Link).setURL(config.fivem.connectLink),
-  ];
-  if (config.fivem.storeLink) {
-    components.push(new ButtonBuilder().setLabel('🛒 חנות השרת').setStyle(ButtonStyle.Link).setURL(config.fivem.storeLink));
-  }
-  components.push(
-    new ButtonBuilder().setCustomId('server_status_refresh').setLabel('רענון').setEmoji('🔄').setStyle(ButtonStyle.Secondary)
-  );
-  return new ActionRowBuilder().addComponents(components);
-}
-
-async function handleServerStatusRefresh(interaction) {
-  await interaction.deferUpdate();
-  const status = await getFiveMStatus();
-  await interaction.editReply({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
 }
 
 // ==========================================================================
@@ -1268,17 +1107,6 @@ const slashCommands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
-    .setName('server-status')
-    .setDescription('מציג פאנל סטטוס שרת FiveM עם פס תפוסה וכפתורי חיבור'),
-
-  new SlashCommandBuilder()
-    .setName('player-info')
-    .setDescription('מחפש שחקן מחובר בשרת ה-FiveM')
-    .addStringOption((o) => o.setName('query').setDescription('שם השחקן או מזהה דיסקורד').setRequired(true)),
-
-  new SlashCommandBuilder().setName('server-players').setDescription('מציג רשימת שחקנים מחוברים לשרת ה-FiveM'),
-
-  new SlashCommandBuilder()
     .setName('addstaff')
     .setDescription('מוסיף חבר צוות חדש ופותח לו חדר אישי (אדמין בלבד)')
     .addUserOption((o) => o.setName('user').setDescription('המשתמש להוספה לצוות').setRequired(true))
@@ -1338,9 +1166,9 @@ const slashCommands = [
 // --------------------------------------------------------------------------
 // שימוש ב-PUT (ולא POST) הוא קריטי: PUT מחליף את *כל* רשימת הפקודות
 // הרשומות בגילדה בבת אחת ברשימה שאנחנו שולחים כאן. המשמעות היא שכל
-// פקודה שהייתה רשומה בדיסקורד בעבר (למשל /ticket-stats או
-// /reset-ticket-stats) אך כבר לא מופיעה במערך slashCommands למעלה —
-// תימחק אוטומטית על ידי דיסקורד עצמו, בלי שצריך לעשות שום דבר ידני.
+// פקודה שהייתה רשומה בדיסקורד בעבר (למשל /server-status או /player-info)
+// אך כבר לא מופיעה במערך slashCommands למעלה — תימחק אוטומטית על ידי
+// דיסקורד עצמו, בלי שצריך לעשות שום דבר ידני.
 // כדי לוודא בבירור מה קרה בכל עלייה, אנחנו משווים בין הפקודות שהיו
 // רשומות קודם לבין מה ש-PUT מחזיר, ומדפיסים בדיוק אילו פקודות נוספו
 // ואילו הוסרו.
@@ -1585,53 +1413,6 @@ async function handleSlashCommand(interaction) {
       }
       const winner = giveaway.participants[Math.floor(Math.random() * giveaway.participants.length)];
       await interaction.reply({ embeds: [successEmbed('🎉 זוכה חדש!', `הזוכה החדש הוא: <@${winner}>`)] });
-      break;
-    }
-
-    case 'server-status': {
-      await interaction.deferReply();
-      const status = await getFiveMStatus();
-      await interaction.editReply({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
-      break;
-    }
-
-    case 'player-info': {
-      const query = options.getString('query');
-      await interaction.deferReply();
-      const status = await getFiveMStatus();
-      if (!status.online) {
-        return interaction.editReply({ embeds: [errorEmbed('השרת לא מחובר', 'לא ניתן להתחבר לשרת ה-FiveM כרגע.')] });
-      }
-      const player = findPlayerInList(status.players, query);
-      if (!player) {
-        return interaction.editReply({ embeds: [errorEmbed('שחקן לא נמצא', `לא נמצא שחקן התואם ל: "${query}"`)] });
-      }
-      const discordId = (player.identifiers || []).find((id) => id.startsWith('discord:'));
-      const e = baseEmbed()
-        .setTitle(`🎮 מידע על שחקן: ${player.name}`)
-        .addFields(
-          { name: '🆔 מזהה שרת', value: `${player.id}`, inline: true },
-          { name: '📶 פינג', value: `${player.ping}ms`, inline: true },
-          { name: '💬 דיסקורד', value: discordId ? `<@${discordId.split(':')[1]}>` : 'לא מקושר', inline: true },
-          { name: '🔑 מזהים', value: (player.identifiers || []).map((i) => `\`${i}\``).join('\n').slice(0, 1000) || 'אין' }
-        );
-      await interaction.editReply({ embeds: [e] });
-      break;
-    }
-
-    case 'server-players': {
-      await interaction.deferReply();
-      const status = await getFiveMStatus();
-      if (!status.online) {
-        return interaction.editReply({ embeds: [errorEmbed('השרת לא מחובר', 'לא ניתן להתחבר לשרת ה-FiveM כרגע.')] });
-      }
-      if (!status.players.length) {
-        return interaction.editReply({ embeds: [infoEmbed('אין שחקנים', 'אין כרגע שחקנים מחוברים לשרת.')] });
-      }
-      const list = status.players.slice(0, 30).map((p) => `**${p.id}.** ${p.name} — ${p.ping}ms`).join('\n');
-      await interaction.editReply({
-        embeds: [infoEmbed(`👥 שחקנים מחוברים (${status.count}/${status.max})`, list)],
-      });
       break;
     }
 
@@ -2108,7 +1889,6 @@ client.on('interactionCreate', async (interaction) => {
       if (id === 'ticket_claim') return handleTicketClaimButton(interaction);
       if (id === 'ticket_close') return handleTicketClose(interaction);
       if (id === 'ticket_transcript') return handleTicketTranscript(interaction);
-      if (id === 'server_status_refresh') return handleServerStatusRefresh(interaction);
       if (id.startsWith('giveaway_enter_')) return handleGiveawayEnter(interaction, id.replace('giveaway_enter_', ''));
       return;
     }
@@ -2154,11 +1934,13 @@ client.on('guildMemberAdd', async (member) => {
   const e = successEmbed('📥 חבר חדש הצטרף', `${member} הצטרף/ה לשרת!\n**סה"כ חברים:** ${member.guild.memberCount}`);
   await sendLog(member.guild, e, 'joinLeaveChannelId');
   await sendWelcomeMessage(member);
+  await updateBotPresence();
 });
 
 client.on('guildMemberRemove', async (member) => {
   const e = errorEmbed('📤 חבר עזב', `${member.user.tag} עזב/ה את השרת.\n**סה"כ חברים:** ${member.guild.memberCount}`);
   await sendLog(member.guild, e, 'joinLeaveChannelId');
+  await updateBotPresence();
 });
 
 client.on('guildBanAdd', async (ban) => {
