@@ -7,24 +7,14 @@
  *      נבחרת, סגירה עם טרנסקריפט)
  *   2. מערכת אימות בכפתור (רול מיידי)
  *   3. מערכת הגרלות (כפתור כניסה, ספירת משתתפים, בחירת זוכים אוטומטית)
- *   4. מערכת סטטוס שרת FiveM (/server-status) + רשימת שחקנים (/server-players)
+ *   4. מערכת סטטוס שרת FiveM (/server-status) + חיפוש שחקן (/player-info)
  *   5. מערכת לוגים מלאה (באנים, טיימאאוטים, קיקים, כניסה/יציאה, אימות)
  *   6. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
  *   7. סטטוס בוט דינמי לפי כמות משתמשים בשרת ה-FiveM
  *
- *  🔧 עדכון גרסה 3.0 (הסרת שליטה חיה בשרת FiveM):
- *   • כל פקודות השליטה בשרת (server-kick, server-ban, server-unban,
- *     server-message) והחיבור ל-Vorino Bridge/SQL הוסרו לגמרי. הבוט כעת
- *     קורא סטטוס בלבד ואינו שולח פקודות לשרת ה-FiveM.
- *   • תוקן/שופר מנגנון קריאת הסטטוס: יש שני מקורות מידע במקביל —
- *     1) Heartbeat: אם מותקן משאב Lua ששולח עדכון סטטוס לבוט (outbound,
- *        לא חסום ע"י אנטי-DDoS) — זו השיטה המומלצת.
- *     2) שליפה ישירה מול IP:PORT (players.json/info.json) — עובדת רק אם
- *        האחסון מאפשר תעבורה נכנסת לפורט המשחק.
- *     אם שתי השיטות נכשלות, הבוט כותב ל-console בדיוק מה נכשל (status
- *     code / קוד שגיאה) כדי שיהיה ברור למה מוצג "אופליין".
- *   • ה-API הרשמי של cfx.re (servers-frontend.fivem.net) חסום (403)
- *     לבקשות סקריפטים ולא נתמך לשימוש חיצוני. לא בשימוש.
+ *  🔧 עדכון אחרון: תוקנה שליפת סטטוס ה-FiveM — כעת נשלף דרך ה-API הרשמי
+ *  של cfx.re (לפי קוד ה-join), עם גיבוי לשאילתה ישירה מול IP:PORT ורישום
+ *  שגיאות אמיתי ללוג, כדי שסטטוס "אופליין" לא יוצג בטעות כששרת בעצם אונליין.
  * ==========================================================================
  */
 
@@ -57,51 +47,12 @@ const axios = require('axios');
 const http = require('http');
 
 // --------------------------------------------------------------------------
-// שרת HTTP — משמש גם ל-keepalive של Render וגם לקבלת "heartbeat" סטטוס
-// מהשרת FiveM עצמו. במקום שהבוט ינסה לגשת פנימה לשרת (תעבורה נכנסת שכמעט
-// תמיד חסומה ע"י האנטי-DDoS של האחסון), שרת ה-FiveM שולח החוצה (outbound,
-// כמעט אף פעם לא חסום) עדכון סטטוס כל 30 שניות. ראו משאב vorino_status.
+// שרת HTTP קטן — נדרש כדי שרנדר (Render) יזהה את השירות כ-"Web Service" חי.
+// רנדר בודק פינג על הפורט הזה כדי לוודא שהתהליך לא קרס.
 // --------------------------------------------------------------------------
-let cachedFivemStatus = null; // { online, hostname, count, max, players, receivedAt }
-const HEARTBEAT_STALE_MS = 90 * 1000; // אם לא הגיע heartbeat תוך 90 שניות -> אופליין
-
 const PORT = process.env.PORT || 3000;
 http
   .createServer((req, res) => {
-    if (req.method === 'POST' && req.url === '/vorino/heartbeat') {
-      const secret = process.env.VORINO_BRIDGE_SECRET || '';
-      if (!secret || req.headers['x-vorino-secret'] !== secret) {
-        console.warn('⚠️ [Heartbeat] בקשה נדחתה - חסר/שגוי X-Vorino-Secret (ודא/י VORINO_BRIDGE_SECRET מוגדר זהה בבוט ובמשאב ה-Lua).');
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
-      }
-      let body = '';
-      req.on('data', (chunk) => {
-        body += chunk;
-        if (body.length > 1e6) req.destroy(); // הגנה מפני payload ענק
-      });
-      req.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          cachedFivemStatus = {
-            online: true,
-            hostname: data.hostname || 'FiveM Server',
-            count: Number(data.count) || 0,
-            max: Number(data.max) || 0,
-            players: Array.isArray(data.players) ? data.players : [],
-            receivedAt: Date.now(),
-          };
-          console.log(`💓 [Heartbeat] התקבל עדכון סטטוס: ${cachedFivemStatus.count}/${cachedFivemStatus.max} שחקנים.`);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: true }));
-        } catch (err) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
-        }
-      });
-      return;
-    }
-
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(
       client.isReady && client.isReady()
@@ -109,11 +60,11 @@ http
         : '🔄 הבוט עולה כרגע...\n'
     );
   })
-  .listen(PORT, () => console.log(`🌐 HTTP keepalive/heartbeat server מאזין על פורט ${PORT}`));
+  .listen(PORT, () => console.log(`🌐 HTTP keepalive server מאזין על פורט ${PORT}`));
 
 // ==========================================================================
 // הגדרות (CONFIG) — ה-IDs נטענים ממשתני סביבה (Render → Environment) כשהם
-// רגישים (טוקן, סיסמאות), והשאר מוגדרים ישירות. אפשר לשנות הכל כאן.
+// רגישים (טוקן), והשאר מוגדרים ישירות. אפשר לשנות הכל כאן.
 // ==========================================================================
 const config = {
   "token": process.env.BOT_TOKEN,
@@ -166,17 +117,18 @@ const config = {
       { "label": "אחר", "value": "other", "emoji": "❓", "description": "כל נושא אחר שלא מופיע למעלה" }
     ],
     "claimMessages": [
-      { "label": "ברוך הבא", "value": "welcome", "text": "שלום וברוך הבא. אני כאן כדי לסייע לך 🙏 אנא פרט/י את הבעיה בהרחבה ככל שניתן." },
-      { "label": "רגע של סבלנות", "value": "patience", "text": "שלום, ראיתי את פנייתך ואני מטפל/ת בה כעת. נדרש מעט סבלנות 🕐" },
-      { "label": "תודה על הפנייה", "value": "thanks", "text": "שלום, תודה שפנית אלינו. כיצד ניתן לסייע לך היום?" },
-      { "label": "בבדיקה", "value": "checking", "text": "הצוות קיבל את פנייתך והיא נבדקת כעת. נעדכן בהקדם 🔎" }
+      { "label": "ברוך הבא", "value": "welcome", "text": "שלום וברוך הבא! אני כאן כדי לעזור לך 🙏 אנא פרט/י את הבעיה בהרחבה ככל שניתן." },
+      { "label": "רגע של סבלנות", "value": "patience", "text": "היי, ראיתי את הפנייה שלך ואני מטפל/ת בה כרגע. רגע של סבלנות בבקשה 🕐" },
+      { "label": "תודה על הפנייה", "value": "thanks", "text": "שלום, תודה שפנית אלינו! איך אני יכול/ה לסייע לך היום?" },
+      { "label": "בבדיקה", "value": "checking", "text": "הצוות קיבל את הפנייה שלך ואנחנו בודקים אותה כרגע, נעדכן בקרוב 🔎" }
     ]
   },
 
   "fivem": {
     "ip": "191.96.229.83",
     "port": "30120",
-    // חייב להיות קישור אמיתי (URL) שמתחיל ב-http:// או https:// כדי שכפתור ה-Link בדיסקורד יעבוד.
+    // חייב להיות קישור אמיתי (URL) שמתחיל ב-http:// או https:// כדי שכפתור ה-Link בדיסקורד יעבוד,
+    // וגם כדי שנוכל לחלץ ממנו את קוד ה-join לשליפה דרך ה-API הרשמי של cfx.re.
     "connectLink": "https://cfx.re/join/rmmg7ej",
     // אופציונלי - אם אין חנות, השאירו מחרוזת ריקה ("") והכפתור פשוט לא יופיע.
     "storeLink": ""
@@ -233,8 +185,7 @@ function defaultData() {
     giveaways: {},        // messageId -> { channelId, prize, endsAt, winners, hostId, participants: [], ended }
     staffChannels: {},    // channelId -> { userId, roleId, accessRoles: [], createdAt }
     claimLeaderboard: {}, // userId -> count של לקיחות טיקטים (לוח מובילים)
-    leaderboardPanel: null,  // { channelId, messageId } של הודעת הפאנל שמתעדכנת אוטומטית
-    serverStatusPanel: null, // { channelId, messageId } של פאנל סטטוס השרת שמתעדכן אוטומטית כל דקה
+    leaderboardPanel: null, // { channelId, messageId } של הודעת הפאנל שמתעדכנת אוטומטית
   };
 }
 
@@ -348,12 +299,44 @@ async function sendLog(guild, embed, key = 'logsChannelId') {
 }
 
 // --------------------------------------------------------------------------
-// FiveM - סטטוס שרת + רשימת שחקנים בלבד (אין כאן שום פעולת שליטה בשרת)
+// FiveM - סטטוס שרת + חיפוש שחקן
 // --------------------------------------------------------------------------
-// שיטת שליפה ישירה (גיבוי) - עובדת רק אם האחסון מאפשר תעבורה נכנסת
-// לפורט המשחק. ברוב האחסונים זה חסום ע"י אנטי-DDoS, ולכן שיטת ברירת
-// המחדל היא ה-heartbeat (ראו cachedFivemStatus למעלה + משאב vorino_status).
+// 🔧 תיקון: הרבה אחסונים ל-FiveM חוסמים גישה חיצונית ישירה לפורט המשחק
+// (הגנת אנטי-DDoS / פיירוול), מה שגרם לסטטוס "אופליין" גם כששרת פעיל
+// לגמרי — וזה נכשל בשקט כי השגיאה האמיתית לא נרשמה בשום מקום.
+//
+// עכשיו השליפה קודם מנסה את ה-API הרשמי של cfx.re (אותו API שמפעיל את
+// כפתור ה-Connect ורשימת השרתים במשחק), לפי קוד ה-join מתוך connectLink.
+// זהו HTTPS רגיל בפורט 443 ולכן לא תלוי בחסימות של פורט המשחק.
+// אם זה נכשל מכל סיבה, יש גיבוי לשאילתה הישנה הישירה מול IP:PORT.
+// כל כשל נרשם ל-console כדי שאפשר יהיה לראות ברנדר (Render) מה קרה בפועל.
 // --------------------------------------------------------------------------
+
+function extractJoinId(link) {
+  if (!link) return null;
+  const match = /cfx\.re\/join\/([a-zA-Z0-9]+)/i.exec(link);
+  return match ? match[1] : null;
+}
+
+async function fetchFiveMViaMasterAPI() {
+  const joinId = extractJoinId(config.fivem.connectLink);
+  if (!joinId) throw new Error('אין קוד cfx.re תקין ב-connectLink');
+  const url = `https://servers-frontend.fivem.net/api/servers/single/${joinId}`;
+  const res = await axios.get(url, { timeout: 6000 });
+  const data = res.data && res.data.Data;
+  if (!data) throw new Error('לא התקבל מידע מה-API הרשמי של FiveM (ייתכן שהשרת לא רשום ברשימת cfx.re)');
+  const players = data.players || [];
+  return {
+    online: true,
+    players,
+    count: typeof data.clients === 'number' ? data.clients : players.length,
+    max:
+      parseInt(data.sv_maxclients, 10) ||
+      parseInt(data.vars && data.vars.sv_maxclients, 10) ||
+      players.length,
+    hostname: data.hostname || (data.vars && data.vars.sv_projectName) || 'FiveM Server',
+  };
+}
 
 async function fetchFiveMPlayers() {
   const url = `http://${config.fivem.ip}:${config.fivem.port}/players.json`;
@@ -381,26 +364,18 @@ async function fetchFiveMViaDirectIP() {
 }
 
 async function getFiveMStatus() {
-  // עדיפות ראשונה: heartbeat שהתקבל מה-FiveM server עצמו (תעבורה יוצאת,
-  // כמעט אף פעם לא חסומה ע"י אנטי-DDoS) - ראו משאב vorino_status.
-  if (cachedFivemStatus && Date.now() - cachedFivemStatus.receivedAt < HEARTBEAT_STALE_MS) {
-    return cachedFivemStatus;
-  }
-  if (cachedFivemStatus && Date.now() - cachedFivemStatus.receivedAt >= HEARTBEAT_STALE_MS) {
-    console.warn(
-      `⚠️ [סטטוס] ה-heartbeat האחרון התקבל לפני ${Math.round((Date.now() - cachedFivemStatus.receivedAt) / 1000)} שניות (מעל הסף של ${HEARTBEAT_STALE_MS / 1000}) — נחשב כלא עדכני, עובר לניסיון ישיר.`
-    );
-  } else if (!cachedFivemStatus) {
-    console.warn('⚠️ [סטטוס] לא התקבל אף heartbeat מאז עליית הבוט — ודא/י שמשאב vorino_status מותקן ורץ בשרת ה-FiveM ושהוא שולח בקשות ל-כתובת ה-Render הנכונה עם אותו VORINO_BRIDGE_SECRET.');
+  // ניסיון ראשון: ה-API הרשמי של FiveM (עובד גם אם השרת חוסם גישה ישירה ל-IP:port)
+  try {
+    return await fetchFiveMViaMasterAPI();
+  } catch (err) {
+    console.warn('⚠️ נכשל שליפת סטטוס FiveM דרך API הרשמי (cfx.re):', err.message);
   }
 
-  // גיבוי: ניסיון ישיר מול IP:PORT - יעבוד רק אם האחסון לא חוסם תעבורה נכנסת
+  // ניסיון שני (גיבוי): שאילתה ישירה מול players.json / info.json
   try {
     return await fetchFiveMViaDirectIP();
   } catch (err) {
-    const status = err.response ? err.response.status : null;
-    const code = err.code || null;
-    console.warn(`⚠️ [סטטוס] נכשל שליפת סטטוס FiveM ישירות מה-IP:PORT (${config.fivem.ip}:${config.fivem.port}). status=${status} code=${code} msg=${err.message} — סביר שהאחסון חוסם תעבורה נכנסת לפורט המשחק (אנטי-DDoS). מומלץ להתקין את משאב ה-heartbeat (vorino_status) בשרת.`);
+    console.warn('⚠️ נכשל שליפת סטטוס FiveM ישירות מה-IP:', err.message);
     return { online: false };
   }
 }
@@ -423,7 +398,7 @@ async function updateBotPresence() {
   const status = await getFiveMStatus();
   if (!status.online) {
     client.user.setPresence({
-      activities: [{ name: 'השרת אינו זמין ❌', type: ActivityType.Watching }],
+      activities: [{ name: 'Server Offline ❌', type: ActivityType.Watching }],
       status: 'dnd',
     });
     return;
@@ -435,7 +410,7 @@ async function updateBotPresence() {
 }
 
 // --------------------------------------------------------------------------
-// עיצוב פאנל סטטוס שרת FiveM — עם פס התקדמות ויזואלי, בלי חשיפת IP/פורט
+// עיצוב פאנל סטטוס שרת FiveM — עם פס התקדמות ויזואלי לכמות השחקנים
 // --------------------------------------------------------------------------
 function buildPlayerProgressBar(count, max, length = 14) {
   const safeMax = max > 0 ? max : Math.max(count, 1);
@@ -445,67 +420,28 @@ function buildPlayerProgressBar(count, max, length = 14) {
   return '🟧'.repeat(filled) + '⬛'.repeat(empty);
 }
 
-function buildPlayersListText(players, limit = 15) {
-  if (!players || !players.length) return null;
-  const shown = players.slice(0, limit).map((p) => `• **${p.name}**${p.ping !== undefined ? ` (${p.ping}ms)` : ''}`);
-  const extra = players.length - shown.length;
-  if (extra > 0) shown.push(`...ועוד ${extra} שחקנים`);
-  return shown.join('\n');
-}
-
 function buildServerStatusEmbed(status) {
-  const divider = '🟠━━━━━━━━━━━━━━━━━━━🟠';
-
   if (!status.online) {
     return baseEmbed()
       .setColor(COLORS.danger)
-      .setTitle('🔴 שרת ה-FiveM אינו זמין')
-      .setDescription(
-        [
-          divider,
-          '**◈ הבוט לא הצליח להתחבר לשרת כרגע.**',
-          '',
-          'ייתכן שהשרת נמצא בתחזוקה, בתהליך הפעלה מחדש, או כבוי זמנית.',
-          'הפאנל יתעדכן אוטומטית ברגע שהשרת יחזור להיות זמין ⏳',
-          divider,
-        ].join('\n')
-      )
-      .addFields(
-        { name: '📶 סטטוס', value: '```diff\n- Offline\n```', inline: true },
-        { name: '🌐 כתובת התחברות', value: `\`${config.fivem.ip}:${config.fivem.port}\``, inline: true }
-      )
-      .setFooter({ text: '🔄 מתעדכן אוטומטית כל דקה • Vorino Bot' });
+      .setTitle('🔴 השרת לא מחובר')
+      .setDescription('לא ניתן להתחבר כרגע לשרת ה-FiveM. ייתכן שהשרת בפעולות תחזוקה או כבוי זמנית.')
+      .addFields({ name: '📶 סטטוס', value: 'Offline ❌', inline: true });
   }
 
   const bar = buildPlayerProgressBar(status.count, status.max);
   const percent = status.max > 0 ? Math.round((status.count / status.max) * 100) : 0;
 
-  const embed = baseEmbed()
+  return baseEmbed()
     .setColor(COLORS.primary)
-    .setTitle(`🟠 ${status.hostname} 🟠`)
-    .setThumbnail(client.user ? client.user.displayAvatarURL() : null)
-    .setDescription(
-      [
-        divider,
-        '**◈ השרת פעיל ומקוון כעת** 🧡✨',
-        divider,
-      ].join('\n')
-    )
+    .setTitle(`🟢 ${status.hostname}`)
+    .setDescription('השרת פעיל ומחובר! 🧡')
     .addFields(
-      { name: '📶 סטטוס', value: '```diff\n+ Online\n```', inline: true },
-      { name: '🌐 כתובת התחברות (IP:PORT)', value: `\`\`\`${config.fivem.ip}:${config.fivem.port}\`\`\``, inline: true },
-      { name: '\u200b', value: '\u200b', inline: false },
-      { name: '👥 שחקנים מחוברים', value: `**${status.count} / ${status.max}** שחקנים  •  **${percent}%** תפוסה`, inline: false },
-      { name: '📊 מד תפוסה', value: `${bar}\n\`${percent}%\``, inline: false }
-    )
-    .setFooter({ text: '🔄 מתעדכן אוטומטית כל דקה • Vorino Bot 🧡' });
-
-  const playersText = buildPlayersListText(status.players);
-  if (playersText) {
-    embed.addFields({ name: '📋 רשימת שחקנים', value: playersText.slice(0, 1024), inline: false });
-  }
-
-  return embed;
+      { name: '👥 שחקנים מחוברים', value: `**${status.count} / ${status.max}** (${percent}%)`, inline: false },
+      { name: '📊 תפוסה', value: bar, inline: false },
+      { name: '📶 סטטוס', value: 'Online ✅', inline: true },
+      { name: '🌐 כתובת', value: `\`${config.fivem.ip}:${config.fivem.port}\``, inline: true }
+    );
 }
 
 function buildServerStatusRow() {
@@ -516,7 +452,7 @@ function buildServerStatusRow() {
     components.push(new ButtonBuilder().setLabel('🛒 חנות השרת').setStyle(ButtonStyle.Link).setURL(config.fivem.storeLink));
   }
   components.push(
-    new ButtonBuilder().setCustomId('server_status_refresh').setLabel('רענון ידני').setEmoji('🔄').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('server_status_refresh').setLabel('רענון').setEmoji('🔄').setStyle(ButtonStyle.Secondary)
   );
   return new ActionRowBuilder().addComponents(components);
 }
@@ -527,38 +463,24 @@ async function handleServerStatusRefresh(interaction) {
   await interaction.editReply({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
 }
 
-// פאנל סטטוס שרת שמתעדכן אוטומטית כל דקה, בדומה ללוח המובילים.
-async function updateServerStatusPanel() {
-  if (!db.serverStatusPanel) return;
-  const { channelId, messageId } = db.serverStatusPanel;
-  try {
-    const channel = await client.channels.fetch(channelId);
-    const msg = await channel.messages.fetch(messageId);
-    const status = await getFiveMStatus();
-    await msg.edit({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
-  } catch (err) {
-    console.error('שגיאה בעדכון פאנל סטטוס השרת (ייתכן שההודעה/הערוץ נמחקו):', err.message);
-  }
-}
-
 // ==========================================================================
 // מערכת טיקטים
 // ==========================================================================
 
 function buildTicketPanelEmbed() {
   return baseEmbed()
-    .setTitle('🎫 מערכת פניות ותמיכה')
+    .setTitle('🎫 מערכת טיקטים')
     .setDescription(
       [
-        '**◈ ברוכים הבאים למרכז התמיכה הרשמי.**',
+        'ברוכים הבאים למערכת התמיכה שלנו!',
         '',
-        'בחר/י את הנושא המתאים מהתפריט למטה כדי לפתוח פנייה חדשה.',
-        'צוות התמיכה יטפל בפנייתך במהירות המרבית 🧡',
+        'בחר/י את הנושא המתאים מהתפריט למטה כדי לפתוח טיקט חדש.',
+        'צוות התמיכה שלנו יטפל בפנייתך בהקדם האפשרי 🧡',
         '',
-        '**כללי פתיחת פנייה:**',
-        '• פנייה אחת בלבד לכל נושא',
-        '• אין לפתוח פניות סרק או לבצע ספאם',
-        '• יש לפרט את הבעיה בצורה ברורה ומדויקת',
+        '**חוקי פתיחת טיקט:**',
+        '• יש לפתוח טיקט אחד בלבד לכל נושא',
+        '• אין לספאם או לפתוח טיקטים סתם',
+        '• יש להסביר את הבעיה בצורה ברורה',
       ].join('\n')
     )
     .setThumbnail(client.user ? client.user.displayAvatarURL() : null)
@@ -568,7 +490,7 @@ function buildTicketPanelEmbed() {
 function buildTicketSelectRow() {
   const select = new StringSelectMenuBuilder()
     .setCustomId('ticket_type_select')
-    .setPlaceholder('📩 בחר/י את סוג הפנייה שברצונך לפתוח')
+    .setPlaceholder('📩 בחר/י את סוג הטיקט שברצונך לפתוח')
     .addOptions(
       config.tickets.types.map((t) => ({
         label: t.label,
@@ -587,14 +509,14 @@ async function sendTicketPanel(channel) {
 function buildTicketControlRow(claimed) {
   const claimBtn = new ButtonBuilder()
     .setCustomId('ticket_claim')
-    .setLabel(claimed ? 'נלקח' : 'קח פנייה')
+    .setLabel(claimed ? 'נלקח' : 'קח טיקט')
     .setEmoji('🙋')
     .setStyle(ButtonStyle.Success)
     .setDisabled(claimed);
 
   const closeBtn = new ButtonBuilder()
     .setCustomId('ticket_close')
-    .setLabel('סגור פנייה')
+    .setLabel('סגור טיקט')
     .setEmoji('🔒')
     .setStyle(ButtonStyle.Danger);
 
@@ -634,7 +556,7 @@ async function createTicketChannel(interaction, typeValue) {
   );
   if (existing) {
     return interaction.reply({
-      embeds: [errorEmbed('פנייה פתוחה כבר קיימת', `כבר יש לך פנייה פתוחה: <#${existing[0]}>`)],
+      embeds: [errorEmbed('טיקט פתוח כבר קיים', `כבר יש לך טיקט פתוח: <#${existing[0]}>`)],
       ephemeral: true,
     });
   }
@@ -703,7 +625,7 @@ async function createTicketChannel(interaction, typeValue) {
     console.error('שגיאה ביצירת ערוץ טיקט:', err);
     db.ticketCounter -= 1;
     return interaction.editReply({
-      embeds: [errorEmbed('שגיאה בפתיחת הפנייה', 'לא ניתן היה ליצור את ערוץ הפנייה. ודא/י שלבוט יש הרשאת "Manage Channels" בשרת ובקטגוריה שהוגדרה.')],
+      embeds: [errorEmbed('שגיאה בפתיחת הטיקט', 'לא ניתן היה ליצור את ערוץ הטיקט. ודא/י שלבוט יש הרשאת "Manage Channels" בשרת ובקטגוריה שהוגדרה.')],
     });
   }
 
@@ -718,12 +640,12 @@ async function createTicketChannel(interaction, typeValue) {
   saveData();
 
   const welcomeEmbed = baseEmbed()
-    .setTitle(`🎫 פנייה #${ticketNumber} — ${ticketTypeLabel(typeValue)}`)
+    .setTitle(`🎫 טיקט #${ticketNumber} — ${ticketTypeLabel(typeValue)}`)
     .setDescription(
       [
         `שלום ${member} 👋`,
         '',
-        'תודה על פנייתך. צוות התמיכה יגיע בהקדם האפשרי.',
+        'תודה שפנית אלינו! צוות התמיכה יגיע בהקדם האפשרי.',
         'בינתיים, אנא פרט/י בהרחבה את הבעיה או הבקשה שלך.',
         '',
         `**נפתח על ידי:** ${member}`,
@@ -744,19 +666,19 @@ async function createTicketChannel(interaction, typeValue) {
   });
 
   await interaction.editReply({
-    embeds: [successEmbed('הפנייה נפתחה בהצלחה', `הפנייה שלך נפתחה: ${ticketChannel}`)],
+    embeds: [successEmbed('הטיקט נפתח בהצלחה', `הטיקט שלך נפתח: ${ticketChannel}`)],
   });
 
   await sendLog(
     guild,
-    infoEmbed('🎫 פנייה חדשה נפתחה', `**מספר:** #${ticketNumber}\n**משתמש:** ${member}\n**סוג:** ${ticketTypeLabel(typeValue)}\n**ערוץ:** ${ticketChannel}`)
+    infoEmbed('🎫 טיקט חדש נפתח', `**מספר:** #${ticketNumber}\n**משתמש:** ${member}\n**סוג:** ${ticketTypeLabel(typeValue)}\n**ערוץ:** ${ticketChannel}`)
   );
 }
 
 function buildClaimMessageSelectRow() {
   const select = new StringSelectMenuBuilder()
     .setCustomId('ticket_claim_message_select')
-    .setPlaceholder('💬 בחר/י הודעת פתיחה לשליחה בפנייה')
+    .setPlaceholder('💬 בחר/י הודעת פתיחה לשליחה בטיקט')
     .addOptions(
       config.tickets.claimMessages.map((m) => ({ label: m.label, value: m.value }))
     );
@@ -766,20 +688,20 @@ function buildClaimMessageSelectRow() {
 async function handleTicketClaimButton(interaction) {
   const ticket = db.tickets[interaction.channel.id];
   if (!ticket) {
-    return interaction.reply({ embeds: [errorEmbed('שגיאה', 'זהו לא ערוץ פנייה תקין.')], ephemeral: true });
+    return interaction.reply({ embeds: [errorEmbed('שגיאה', 'זהו לא ערוץ טיקט תקין.')], ephemeral: true });
   }
   if (!hasStaffRole(interaction.member)) {
-    return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק צוות רשאי לקחת פניות.')], ephemeral: true });
+    return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'רק צוות רשאי לקחת טיקטים.')], ephemeral: true });
   }
   if (ticket.claimedBy) {
     return interaction.reply({
-      embeds: [errorEmbed('כבר נלקח', `הפנייה הזו כבר נלקחה על ידי <@${ticket.claimedBy}>`)],
+      embeds: [errorEmbed('כבר נלקח', `הטיקט הזה כבר נלקח על ידי <@${ticket.claimedBy}>`)],
       ephemeral: true,
     });
   }
 
   await interaction.reply({
-    content: 'בחר/י הודעה שתישלח בערוץ הפנייה עם לקיחתה:',
+    content: 'בחר/י הודעה שתישלח בערוץ הטיקט עם לקיחתו:',
     components: [buildClaimMessageSelectRow()],
     ephemeral: true,
   });
@@ -787,7 +709,7 @@ async function handleTicketClaimButton(interaction) {
 
 async function handleClaimMessageSelect(interaction) {
   const ticket = db.tickets[interaction.channel.id];
-  if (!ticket) return interaction.update({ content: 'שגיאה: פנייה לא נמצאה.', components: [] });
+  if (!ticket) return interaction.update({ content: 'שגיאה: טיקט לא נמצא.', components: [] });
 
   const chosen = config.tickets.claimMessages.find((m) => m.value === interaction.values[0]);
   ticket.claimedBy = interaction.user.id;
@@ -795,9 +717,9 @@ async function handleClaimMessageSelect(interaction) {
   db.claimLeaderboard[interaction.user.id] += 1;
   saveData();
 
-  const claimEmbed = successEmbed('🙋 הפנייה נלקחה', `הפנייה נלקחה על ידי ${interaction.user}`).addFields({
+  const claimEmbed = successEmbed('🙋 הטיקט נלקח', `הטיקט נלקח על ידי ${interaction.user}`).addFields({
     name: 'הודעה מהצוות',
-    value: chosen ? chosen.text : 'הפנייה נלקחה וטופלת בקרוב.',
+    value: chosen ? chosen.text : 'הטיקט נלקח וטופל בקרוב.',
   });
 
   await interaction.channel.send({ embeds: [claimEmbed] });
@@ -811,11 +733,11 @@ async function handleClaimMessageSelect(interaction) {
     await controlMsg.edit({ components: [buildTicketControlRow(true)] }).catch(() => {});
   }
 
-  await interaction.update({ content: '✅ ההודעה נשלחה בהצלחה בפנייה.', components: [] });
+  await interaction.update({ content: '✅ ההודעה נשלחה בהצלחה בטיקט.', components: [] });
 
   await sendLog(
     interaction.guild,
-    infoEmbed('🙋 פנייה נלקחה', `**פנייה:** #${ticket.ticketNumber}\n**נלקחה על ידי:** ${interaction.user}\n**ערוץ:** ${interaction.channel}`)
+    infoEmbed('🙋 טיקט נלקח', `**טיקט:** #${ticket.ticketNumber}\n**נלקח על ידי:** ${interaction.user}\n**ערוץ:** ${interaction.channel}`)
   );
 
   await updateLeaderboardPanel(interaction.guild);
@@ -855,12 +777,12 @@ async function handleTicketTranscript(interaction) {
 
 async function handleTicketClose(interaction) {
   const ticket = db.tickets[interaction.channel.id];
-  if (!ticket) return interaction.reply({ embeds: [errorEmbed('שגיאה', 'זהו לא ערוץ פנייה תקין.')], ephemeral: true });
+  if (!ticket) return interaction.reply({ embeds: [errorEmbed('שגיאה', 'זהו לא ערוץ טיקט תקין.')], ephemeral: true });
   if (!hasStaffRole(interaction.member) && interaction.user.id !== ticket.userId) {
-    return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לסגור פנייה זו.')], ephemeral: true });
+    return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לסגור טיקט זה.')], ephemeral: true });
   }
 
-  const modal = new ModalBuilder().setCustomId('ticket_close_modal').setTitle('סגירת פנייה');
+  const modal = new ModalBuilder().setCustomId('ticket_close_modal').setTitle('סגירת טיקט');
   const reasonInput = new TextInputBuilder()
     .setCustomId('close_reason')
     .setLabel('סיבת הסגירה (אופציונלי)')
@@ -873,10 +795,10 @@ async function handleTicketClose(interaction) {
 
 async function handleTicketCloseModal(interaction) {
   const ticket = db.tickets[interaction.channel.id];
-  if (!ticket) return interaction.reply({ content: 'שגיאה: פנייה לא נמצאה.', ephemeral: true });
+  if (!ticket) return interaction.reply({ content: 'שגיאה: טיקט לא נמצא.', ephemeral: true });
 
   const reason = interaction.fields.getTextInputValue('close_reason') || 'לא צוינה סיבה';
-  await interaction.reply({ embeds: [infoEmbed('🔒 סוגר את הפנייה...', `הפנייה תיסגר בעוד 5 שניות.\n**סיבה:** ${reason}`)] });
+  await interaction.reply({ embeds: [infoEmbed('🔒 סוגר את הטיקט...', `הטיקט ייסגר בעוד 5 שניות.\n**סיבה:** ${reason}`)] });
 
   const transcriptText = await generateTranscript(interaction.channel);
   const buffer = Buffer.from(transcriptText, 'utf-8');
@@ -884,8 +806,8 @@ async function handleTicketCloseModal(interaction) {
 
   const transcriptChannel = await getLogChannel(interaction.guild, 'transcriptsChannelId');
   const closeLog = infoEmbed(
-    '🔒 פנייה נסגרה',
-    `**מספר:** #${ticket.ticketNumber}\n**נפתחה על ידי:** <@${ticket.userId}>\n**נסגרה על ידי:** ${interaction.user}\n**סיבה:** ${reason}`
+    '🔒 טיקט נסגר',
+    `**מספר:** #${ticket.ticketNumber}\n**נפתח על ידי:** <@${ticket.userId}>\n**נסגר על ידי:** ${interaction.user}\n**סיבה:** ${reason}`
   );
   if (transcriptChannel) transcriptChannel.send({ embeds: [closeLog], files: [attachment] }).catch(() => {});
   await sendLog(interaction.guild, closeLog);
@@ -917,7 +839,7 @@ function buildWelcomeEmbed(member) {
         '',
         randomMsg,
         '',
-        `🎫 לא לשכוח לעבור אימות ולפתוח פנייה אם צריך עזרה.`,
+        `🎫 לא לשכוח לעבור אימות ולפתוח טיקט אם צריך עזרה.`,
       ].join('\n')
     )
     .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
@@ -1257,20 +1179,20 @@ const slashCommands = [
 
   new SlashCommandBuilder()
     .setName('ban')
-    .setDescription('חוסם משתמש מהשרת (דיסקורד)')
+    .setDescription('חוסם משתמש מהשרת')
     .addUserOption((o) => o.setName('user').setDescription('המשתמש לחסימה').setRequired(true))
     .addStringOption((o) => o.setName('reason').setDescription('סיבת החסימה').setRequired(false))
     .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
 
   new SlashCommandBuilder()
     .setName('unban')
-    .setDescription('מסיר חסימה ממשתמש (דיסקורד)')
+    .setDescription('מסיר חסימה ממשתמש')
     .addStringOption((o) => o.setName('userid').setDescription('מזהה המשתמש').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
 
   new SlashCommandBuilder()
     .setName('kick')
-    .setDescription('מסלק משתמש מהשרת (דיסקורד)')
+    .setDescription('מסלק משתמש מהשרת')
     .addUserOption((o) => o.setName('user').setDescription('המשתמש לסילוק').setRequired(true))
     .addStringOption((o) => o.setName('reason').setDescription('סיבת הסילוק').setRequired(false))
     .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
@@ -1347,7 +1269,12 @@ const slashCommands = [
 
   new SlashCommandBuilder()
     .setName('server-status')
-    .setDescription('מציג פאנל סטטוס שרת FiveM חי (מתעדכן אוטומטית כל דקה, כולל רשימת שחקנים)'),
+    .setDescription('מציג פאנל סטטוס שרת FiveM עם פס תפוסה וכפתורי חיבור'),
+
+  new SlashCommandBuilder()
+    .setName('player-info')
+    .setDescription('מחפש שחקן מחובר בשרת ה-FiveM')
+    .addStringOption((o) => o.setName('query').setDescription('שם השחקן או מזהה דיסקורד').setRequired(true)),
 
   new SlashCommandBuilder().setName('server-players').setDescription('מציג רשימת שחקנים מחוברים לשרת ה-FiveM'),
 
@@ -1408,6 +1335,15 @@ const slashCommands = [
 
 // --------------------------------------------------------------------------
 // רישום פקודות סלאש — סנכרון מלא מול דיסקורד
+// --------------------------------------------------------------------------
+// שימוש ב-PUT (ולא POST) הוא קריטי: PUT מחליף את *כל* רשימת הפקודות
+// הרשומות בגילדה בבת אחת ברשימה שאנחנו שולחים כאן. המשמעות היא שכל
+// פקודה שהייתה רשומה בדיסקורד בעבר (למשל /ticket-stats או
+// /reset-ticket-stats) אך כבר לא מופיעה במערך slashCommands למעלה —
+// תימחק אוטומטית על ידי דיסקורד עצמו, בלי שצריך לעשות שום דבר ידני.
+// כדי לוודא בבירור מה קרה בכל עלייה, אנחנו משווים בין הפקודות שהיו
+// רשומות קודם לבין מה ש-PUT מחזיר, ומדפיסים בדיוק אילו פקודות נוספו
+// ואילו הוסרו.
 // --------------------------------------------------------------------------
 async function registerSlashCommands() {
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -1655,10 +1591,31 @@ async function handleSlashCommand(interaction) {
     case 'server-status': {
       await interaction.deferReply();
       const status = await getFiveMStatus();
-      const sentMsg = await interaction.editReply({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
-      // שומרים את ההודעה כדי שהפאנל הזה יתעדכן אוטומטית כל דקה
-      db.serverStatusPanel = { channelId: interaction.channel.id, messageId: sentMsg.id };
-      saveData();
+      await interaction.editReply({ embeds: [buildServerStatusEmbed(status)], components: [buildServerStatusRow()] });
+      break;
+    }
+
+    case 'player-info': {
+      const query = options.getString('query');
+      await interaction.deferReply();
+      const status = await getFiveMStatus();
+      if (!status.online) {
+        return interaction.editReply({ embeds: [errorEmbed('השרת לא מחובר', 'לא ניתן להתחבר לשרת ה-FiveM כרגע.')] });
+      }
+      const player = findPlayerInList(status.players, query);
+      if (!player) {
+        return interaction.editReply({ embeds: [errorEmbed('שחקן לא נמצא', `לא נמצא שחקן התואם ל: "${query}"`)] });
+      }
+      const discordId = (player.identifiers || []).find((id) => id.startsWith('discord:'));
+      const e = baseEmbed()
+        .setTitle(`🎮 מידע על שחקן: ${player.name}`)
+        .addFields(
+          { name: '🆔 מזהה שרת', value: `${player.id}`, inline: true },
+          { name: '📶 פינג', value: `${player.ping}ms`, inline: true },
+          { name: '💬 דיסקורד', value: discordId ? `<@${discordId.split(':')[1]}>` : 'לא מקושר', inline: true },
+          { name: '🔑 מזהים', value: (player.identifiers || []).map((i) => `\`${i}\``).join('\n').slice(0, 1000) || 'אין' }
+        );
+      await interaction.editReply({ embeds: [e] });
       break;
     }
 
@@ -1666,19 +1623,12 @@ async function handleSlashCommand(interaction) {
       await interaction.deferReply();
       const status = await getFiveMStatus();
       if (!status.online) {
-        return interaction.editReply({
-          embeds: [
-            errorEmbed(
-              'השרת לא מחובר',
-              'לא ניתן להתחבר לשרת ה-FiveM כרגע. אם השרת בפועל פעיל, ראו את הלוגים של הבוט (Render) לפרטי השגיאה המדויקים — לרוב זו חסימת אנטי-DDoS על תעבורה נכנסת, ומומלץ להתקין את משאב ה-heartbeat (vorino_status).'
-            ),
-          ],
-        });
+        return interaction.editReply({ embeds: [errorEmbed('השרת לא מחובר', 'לא ניתן להתחבר לשרת ה-FiveM כרגע.')] });
       }
       if (!status.players.length) {
         return interaction.editReply({ embeds: [infoEmbed('אין שחקנים', 'אין כרגע שחקנים מחוברים לשרת.')] });
       }
-      const list = status.players.slice(0, 30).map((p) => `**${p.id}.** ${p.name}${p.ping !== undefined ? ` — ${p.ping}ms` : ''}`).join('\n');
+      const list = status.players.slice(0, 30).map((p) => `**${p.id}.** ${p.name} — ${p.ping}ms`).join('\n');
       await interaction.editReply({
         embeds: [infoEmbed(`👥 שחקנים מחוברים (${status.count}/${status.max})`, list)],
       });
@@ -1735,10 +1685,14 @@ async function handleSlashCommand(interaction) {
       const seniorRoleIds = roleIndex === -1 ? [] : hierarchy.slice(roleIndex + 1);
 
       // --------------------------------------------------------------------
-      // 🔧 כל איבר ב-overwrites חייב id + type מפורש כדי למנוע שגיאת
-      // "Supplied parameter is not a cached User or Role" — כל רול נבדק
-      // מול guild.roles.cache לפני שהוא נכנס לרשימה, ורולים לא-קיימים
-      // פשוט מדולגים במקום לקרוס את כל הפקודה.
+      // 🔧 תיקון: כל איבר ב-overwrites חייב id + type מפורש.
+      // בגרסה הקודמת חסרו type-ים (ולעיתים אף .id על guild.roles.everyone),
+      // מה שגרם ל-discord.js לנסות "לנחש" את סוג ה-ID לפי קאש השרת.
+      // כשה-ID לא היה קאש-ד כרול/משתמש בשרת (למשל adminRoleId שגוי, או
+      // רול ישן ב-hierarchy/access_role שנמחק), זה קרס עם:
+      // "Supplied parameter is not a cached User or Role".
+      // עכשיו כל רול נבדק מול guild.roles.cache לפני שהוא נכנס לרשימה,
+      // ורולים לא-קיימים פשוט מדולגים במקום לקרוס את כל הפקודה.
       // --------------------------------------------------------------------
       const overwrites = [
         { id: guild.roles.everyone.id, type: OverwriteType.Role, deny: [PermissionFlagsBits.ViewChannel] },
@@ -2033,6 +1987,7 @@ async function handlePrefixCommand(message) {
 
 // --------------------------------------------------------------------------
 // בדיקת הרשאות הבוט + מיקומו בהיררכיית הרולים
+// רץ אוטומטית בעליית הבוט, ומדפיס/שולח ללוגים בדיוק מה חסר ומה לתקן
 // --------------------------------------------------------------------------
 async function checkBotPermissions(guild) {
   const me = guild.members.me || (await guild.members.fetchMe().catch(() => null));
@@ -2113,10 +2068,6 @@ async function checkBotPermissions(guild) {
     }
   }
 
-  if (!process.env.VORINO_BRIDGE_SECRET) {
-    console.warn('⚠️ VORINO_BRIDGE_SECRET לא הוגדר — מנגנון ה-heartbeat (משאב vorino_status בשרת) לא יוכל לאמת את עצמו מול הבוט, וסטטוס השרת יסתמך רק על שליפה ישירה מול IP:PORT (שבדרך כלל חסומה ע"י אנטי-DDoS). מומלץ להגדיר VORINO_BRIDGE_SECRET באותה ערך גם בבוט וגם במשאב ה-Lua.');
-  }
-
   if (warnLines.length) {
     await sendLog(guild, warningEmbed('⚠️ נמצאו בעיות הרשאה/הגדרה בהפעלת הבוט', warnLines.join('\n\n')));
   }
@@ -2140,9 +2091,7 @@ client.once('ready', async () => {
 
   restoreGiveawaysOnStartup();
   await updateBotPresence();
-  await updateServerStatusPanel();
-  setInterval(updateBotPresence, 60 * 1000);        // עדכון סטטוס הבוט כל דקה
-  setInterval(updateServerStatusPanel, 60 * 1000);   // עדכון פאנל סטטוס השרת כל דקה
+  setInterval(updateBotPresence, 60 * 1000); // עדכון סטטוס כל דקה
   console.log('🧡 Vorino Bot מוכן לפעולה!');
 });
 
