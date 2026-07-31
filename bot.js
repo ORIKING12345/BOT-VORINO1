@@ -7,22 +7,24 @@
  *      נבחרת, סגירה עם טרנסקריפט)
  *   2. מערכת אימות בכפתור (רול מיידי)
  *   3. מערכת הגרלות (כפתור כניסה, ספירת משתתפים, בחירת זוכים אוטומטית)
- *   4. מערכת סטטוס שרת FiveM (/server-status) + חיפוש שחקן (/player-info)
- *      + חיבור ל-SQL לשליפת נתוני שחקנים אמיתיים מהדאטהבייס
- *   5. שליטה חיה בשרת ה-FiveM דרך Vorino Bridge (HTTP מאובטח): קיק,
- *      באן, הסרת באן, שידור הודעה
- *   6. מערכת לוגים מלאה (באנים, טיימאאוטים, קיקים, כניסה/יציאה, אימות)
- *   7. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
- *   8. סטטוס בוט דינמי לפי כמות משתמשים בשרת ה-FiveM
+ *   4. מערכת סטטוס שרת FiveM (/server-status) + רשימת שחקנים (/server-players)
+ *   5. מערכת לוגים מלאה (באנים, טיימאאוטים, קיקים, כניסה/יציאה, אימות)
+ *   6. מודרציה בסיסית + אבטחה (אנטי-לינק, אנטי-ספאם)
+ *   7. סטטוס בוט דינמי לפי כמות משתמשים בשרת ה-FiveM
  *
- *  🔧 עדכון גרסה 2.1 (תיקון סטטוס שרת):
- *   • ה-API הרשמי של cfx.re (servers-frontend.fivem.net) חסום כעת (403)
- *     לבקשות סקריפטים ולא נתמך יותר לשימוש חיצוני. הוסר משימוש קבוע.
- *   • שיטת השליפה הישירה מול IP:PORT (players.json/info.json) עדיין
- *     נשמרת כגיבוי, אך ברוב האחסונים חסומה ע"י אנטי-DDoS לתעבורה נכנסת.
- *   • נוסף מנגנון "Heartbeat": שרת ה-FiveM עצמו שולח (outbound, לא חסום)
- *     עדכון סטטוס לבוט כל 30 שניות דרך משאב Lua נפרד (vorino_status),
- *     והבוט שומר את זה בזיכרון ומציג אותו בפאנל. זו כעת שיטת ברירת המחדל.
+ *  🔧 עדכון גרסה 3.0 (הסרת שליטה חיה בשרת FiveM):
+ *   • כל פקודות השליטה בשרת (server-kick, server-ban, server-unban,
+ *     server-message) והחיבור ל-Vorino Bridge/SQL הוסרו לגמרי. הבוט כעת
+ *     קורא סטטוס בלבד ואינו שולח פקודות לשרת ה-FiveM.
+ *   • תוקן/שופר מנגנון קריאת הסטטוס: יש שני מקורות מידע במקביל —
+ *     1) Heartbeat: אם מותקן משאב Lua ששולח עדכון סטטוס לבוט (outbound,
+ *        לא חסום ע"י אנטי-DDoS) — זו השיטה המומלצת.
+ *     2) שליפה ישירה מול IP:PORT (players.json/info.json) — עובדת רק אם
+ *        האחסון מאפשר תעבורה נכנסת לפורט המשחק.
+ *     אם שתי השיטות נכשלות, הבוט כותב ל-console בדיוק מה נכשל (status
+ *     code / קוד שגיאה) כדי שיהיה ברור למה מוצג "אופליין".
+ *   • ה-API הרשמי של cfx.re (servers-frontend.fivem.net) חסום (403)
+ *     לבקשות סקריפטים ולא נתמך לשימוש חיצוני. לא בשימוש.
  * ==========================================================================
  */
 
@@ -69,6 +71,7 @@ http
     if (req.method === 'POST' && req.url === '/vorino/heartbeat') {
       const secret = process.env.VORINO_BRIDGE_SECRET || '';
       if (!secret || req.headers['x-vorino-secret'] !== secret) {
+        console.warn('⚠️ [Heartbeat] בקשה נדחתה - חסר/שגוי X-Vorino-Secret (ודא/י VORINO_BRIDGE_SECRET מוגדר זהה בבוט ובמשאב ה-Lua).');
         res.writeHead(401, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
       }
@@ -88,6 +91,7 @@ http
             players: Array.isArray(data.players) ? data.players : [],
             receivedAt: Date.now(),
           };
+          console.log(`💓 [Heartbeat] התקבל עדכון סטטוס: ${cachedFivemStatus.count}/${cachedFivemStatus.max} שחקנים.`);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: true }));
         } catch (err) {
@@ -178,22 +182,6 @@ const config = {
     "storeLink": ""
   },
 
-  // --------------------------------------------------------------------
-  // VORINO BRIDGE — שליטה חיה בשרת ה-FiveM (קיק / באן / הסרת באן / הודעה)
-  // דרך משאב Lua ייעודי (vorino_bridge) שרץ בתוך השרת ומאזין ל-HTTP.
-  // חובה: להתקין את המשאב vorino_bridge בשרת, ולהגדיר ב-server.cfg:
-  //   ensure vorino_bridge
-  //   setr vorino_secret "אותה_סיסמה_בדיוק_כמו_VORINO_BRIDGE_SECRET"
-  // הסיסמה עצמה נטענת אך ורק ממשתנה סביבה — לעולם לא נכתבת כאן בקוד.
-  // שימו לב: אם האחסון חוסם תעבורה נכנסת לפורט המשחק (כמו שקורה עם
-  // players.json/info.json), גם הבריאג' הזה עלול להיכשל מאותה סיבה.
-  // ראו משאב vorino_status לפתרון מבוסס heartbeat יוצא לגבי סטטוס בלבד.
-  // --------------------------------------------------------------------
-  "bridge": {
-    "secret": process.env.VORINO_BRIDGE_SECRET || "",
-    "baseUrl": "" // מוגדר בפועל מיד אחרי יצירת האובייקט (תלוי ב-fivem.ip/port)
-  },
-
   "giveaways": {
     "emoji": "🎉"
   },
@@ -212,9 +200,6 @@ const config = {
     ]
   }
 };
-
-// כתובת הבסיס של גשר ה-HTTP בשרת (אותו IP:PORT כמו fivem, אלא אם הוגדר אחרת)
-config.bridge.baseUrl = process.env.VORINO_BRIDGE_URL || `http://${config.fivem.ip}:${config.fivem.port}`;
 
 // --------------------------------------------------------------------------
 // קליינט
@@ -362,88 +347,10 @@ async function sendLog(guild, embed, key = 'logsChannelId') {
   if (ch) ch.send({ embeds: [embed] }).catch(() => {});
 }
 
-// ==========================================================================
-// VORINO BRIDGE — שליטה חיה בשרת FiveM דרך HTTP (לא RCON)
-// ==========================================================================
-// שכבה הזו מדברת עם המשאב Lua "vorino_bridge" שרץ בתוך שרת ה-FiveM עצמו
-// (ראו את הקובץ vorino_bridge/server.lua). כל בקשה נשלחת עם כותרת
-// X-Vorino-Secret שחייבת להתאים בדיוק לסיסמה שהוגדרה גם בשרת (vorino_secret)
-// וגם כאן אצל הבוט (VORINO_BRIDGE_SECRET). כל בקשה ותגובה נרשמות ל-console
-// כדי שיהיה אפשר לעקוב אחרי כל פעולה שמתבצעת מול השרת.
-// שימו לב: פונקציות אלו דורשות תעבורה *נכנסת* לשרת ה-FiveM. אם האחסון
-// חוסם זאת (כמו שקורה עם סטטוס השרת), גם הפקודות האלו ייכשלו בטיימאאוט.
 // --------------------------------------------------------------------------
-async function bridgeRequest(path, body, timeoutMs = 6000) {
-  if (!config.bridge.secret) {
-    throw new Error('לא הוגדר VORINO_BRIDGE_SECRET במשתני הסביבה — לא ניתן לתקשר עם השרת.');
-  }
-
-  const url = `${config.bridge.baseUrl}${path}`;
-  console.log(`📡 [Vorino Bridge] → בקשה יוצאת: ${path} | payload: ${JSON.stringify(body)}`);
-
-  try {
-    const res = await axios.post(url, body, {
-      timeout: timeoutMs,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Vorino-Secret': config.bridge.secret,
-      },
-    });
-
-    console.log(`✅ [Vorino Bridge] ← תגובה מ-${path}: ${JSON.stringify(res.data)}`);
-
-    if (!res.data || res.data.ok !== true) {
-      throw new Error((res.data && res.data.error) || 'השרת החזיר תגובה לא תקינה.');
-    }
-    return res.data;
-  } catch (err) {
-    const detail = err.response && err.response.data ? JSON.stringify(err.response.data) : err.message;
-    console.error(`❌ [Vorino Bridge] שגיאה בבקשה ל-${path}: ${detail}`);
-    if (err.response && err.response.status === 401) {
-      throw new Error('אימות נכשל מול השרת (401) — ודא/י שהסיסמה זהה בשרת (vorino_secret) ואצל הבוט (VORINO_BRIDGE_SECRET).');
-    }
-    throw new Error(`תקשורת עם השרת נכשלה: ${detail}`);
-  }
-}
-
-async function bridgeKickPlayer(serverId, reason) {
-  return bridgeRequest('/vorino/kick', { id: serverId, reason });
-}
-
-async function bridgeBanPlayer(serverId, reason) {
-  return bridgeRequest('/vorino/ban', { id: serverId, reason });
-}
-
-async function bridgeUnbanPlayer(identifier) {
-  return bridgeRequest('/vorino/unban', { identifier });
-}
-
-async function bridgeBroadcastMessage(message) {
-  return bridgeRequest('/vorino/message', { message });
-}
-
-// ==========================================================================
-// נתוני שחקנים ממסד הנתונים — נשלפים מתוך השרת עצמו דרך Vorino Bridge
-// ==========================================================================
-// הבוט לא מתחבר למסד הנתונים ישירות בכלל. הבקשה נשלחת למשאב ה-Lua
-// (vorino_bridge/server.lua) שרץ בתוך שרת ה-FiveM, והוא זה שמריץ את
-// שאילתת ה-SQL בעזרת oxmysql / mysql-async שכבר מותקן שם, ומחזיר את
-// התוצאה כ-JSON. כך אין צורך לחשוף את מסד הנתונים כלפי חוץ בכלל.
+// FiveM - סטטוס שרת + רשימת שחקנים בלבד (אין כאן שום פעולת שליטה בשרת)
 // --------------------------------------------------------------------------
-async function fetchPlayerFromDatabase(query) {
-  try {
-    const result = await bridgeRequest('/vorino/player-info', { query });
-    return result.player || null;
-  } catch (err) {
-    console.warn(`ℹ️ [Vorino Bridge] לא ניתן היה לשלוף נתוני מסד נתונים: ${err.message}`);
-    return null;
-  }
-}
-
-// --------------------------------------------------------------------------
-// FiveM - סטטוס שרת + חיפוש שחקן
-// --------------------------------------------------------------------------
-// שיטת שליפה ישירה (גיבוי בלבד) - עובדת רק אם האחסון מאפשר תעבורה נכנסת
+// שיטת שליפה ישירה (גיבוי) - עובדת רק אם האחסון מאפשר תעבורה נכנסת
 // לפורט המשחק. ברוב האחסונים זה חסום ע"י אנטי-DDoS, ולכן שיטת ברירת
 // המחדל היא ה-heartbeat (ראו cachedFivemStatus למעלה + משאב vorino_status).
 // --------------------------------------------------------------------------
@@ -479,6 +386,13 @@ async function getFiveMStatus() {
   if (cachedFivemStatus && Date.now() - cachedFivemStatus.receivedAt < HEARTBEAT_STALE_MS) {
     return cachedFivemStatus;
   }
+  if (cachedFivemStatus && Date.now() - cachedFivemStatus.receivedAt >= HEARTBEAT_STALE_MS) {
+    console.warn(
+      `⚠️ [סטטוס] ה-heartbeat האחרון התקבל לפני ${Math.round((Date.now() - cachedFivemStatus.receivedAt) / 1000)} שניות (מעל הסף של ${HEARTBEAT_STALE_MS / 1000}) — נחשב כלא עדכני, עובר לניסיון ישיר.`
+    );
+  } else if (!cachedFivemStatus) {
+    console.warn('⚠️ [סטטוס] לא התקבל אף heartbeat מאז עליית הבוט — ודא/י שמשאב vorino_status מותקן ורץ בשרת ה-FiveM ושהוא שולח בקשות ל-כתובת ה-Render הנכונה עם אותו VORINO_BRIDGE_SECRET.');
+  }
 
   // גיבוי: ניסיון ישיר מול IP:PORT - יעבוד רק אם האחסון לא חוסם תעבורה נכנסת
   try {
@@ -486,7 +400,7 @@ async function getFiveMStatus() {
   } catch (err) {
     const status = err.response ? err.response.status : null;
     const code = err.code || null;
-    console.warn(`⚠️ נכשל שליפת סטטוס FiveM ישירות מה-IP. status=${status} code=${code} msg=${err.message}`);
+    console.warn(`⚠️ [סטטוס] נכשל שליפת סטטוס FiveM ישירות מה-IP:PORT (${config.fivem.ip}:${config.fivem.port}). status=${status} code=${code} msg=${err.message} — סביר שהאחסון חוסם תעבורה נכנסת לפורט המשחק (אנטי-DDoS). מומלץ להתקין את משאב ה-heartbeat (vorino_status) בשרת.`);
     return { online: false };
   }
 }
@@ -531,6 +445,14 @@ function buildPlayerProgressBar(count, max, length = 14) {
   return '🟧'.repeat(filled) + '⬛'.repeat(empty);
 }
 
+function buildPlayersListText(players, limit = 15) {
+  if (!players || !players.length) return null;
+  const shown = players.slice(0, limit).map((p) => `• **${p.name}**${p.ping !== undefined ? ` (${p.ping}ms)` : ''}`);
+  const extra = players.length - shown.length;
+  if (extra > 0) shown.push(`...ועוד ${extra} שחקנים`);
+  return shown.join('\n');
+}
+
 function buildServerStatusEmbed(status) {
   const divider = '🟠━━━━━━━━━━━━━━━━━━━🟠';
 
@@ -558,7 +480,7 @@ function buildServerStatusEmbed(status) {
   const bar = buildPlayerProgressBar(status.count, status.max);
   const percent = status.max > 0 ? Math.round((status.count / status.max) * 100) : 0;
 
-  return baseEmbed()
+  const embed = baseEmbed()
     .setColor(COLORS.primary)
     .setTitle(`🟠 ${status.hostname} 🟠`)
     .setThumbnail(client.user ? client.user.displayAvatarURL() : null)
@@ -577,6 +499,13 @@ function buildServerStatusEmbed(status) {
       { name: '📊 מד תפוסה', value: `${bar}\n\`${percent}%\``, inline: false }
     )
     .setFooter({ text: '🔄 מתעדכן אוטומטית כל דקה • Vorino Bot 🧡' });
+
+  const playersText = buildPlayersListText(status.players);
+  if (playersText) {
+    embed.addFields({ name: '📋 רשימת שחקנים', value: playersText.slice(0, 1024), inline: false });
+  }
+
+  return embed;
 }
 
 function buildServerStatusRow() {
@@ -1418,40 +1347,9 @@ const slashCommands = [
 
   new SlashCommandBuilder()
     .setName('server-status')
-    .setDescription('מציג פאנל סטטוס שרת FiveM חי (מתעדכן אוטומטית כל דקה)'),
-
-  new SlashCommandBuilder()
-    .setName('player-info')
-    .setDescription('מחפש שחקן בשרת ה-FiveM (חי + מסד נתונים, אם מוגדר)')
-    .addStringOption((o) => o.setName('query').setDescription('שם השחקן, מזהה בשרת או זיהוי').setRequired(true)),
+    .setDescription('מציג פאנל סטטוס שרת FiveM חי (מתעדכן אוטומטית כל דקה, כולל רשימת שחקנים)'),
 
   new SlashCommandBuilder().setName('server-players').setDescription('מציג רשימת שחקנים מחוברים לשרת ה-FiveM'),
-
-  new SlashCommandBuilder()
-    .setName('server-kick')
-    .setDescription('מסלק שחקן משרת ה-FiveM עצמו (בזמן אמת, דרך Vorino Bridge)')
-    .addIntegerOption((o) => o.setName('server_id').setDescription('מזהה השחקן בשרת (Server ID)').setRequired(true))
-    .addStringOption((o) => o.setName('reason').setDescription('סיבת הסילוק').setRequired(false))
-    .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
-
-  new SlashCommandBuilder()
-    .setName('server-ban')
-    .setDescription('חוסם שחקן משרת ה-FiveM עצמו (בזמן אמת, דרך Vorino Bridge)')
-    .addIntegerOption((o) => o.setName('server_id').setDescription('מזהה השחקן בשרת (Server ID)').setRequired(true))
-    .addStringOption((o) => o.setName('reason').setDescription('סיבת החסימה').setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
-
-  new SlashCommandBuilder()
-    .setName('server-unban')
-    .setDescription('מסיר חסימה משחקן בשרת ה-FiveM עצמו (בזמן אמת, דרך Vorino Bridge)')
-    .addStringOption((o) => o.setName('identifier').setDescription('מזהה הבאן / הזיהוי של השחקן').setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
-
-  new SlashCommandBuilder()
-    .setName('server-message')
-    .setDescription('משדר הודעה לכלל השחקנים בשרת ה-FiveM (בזמן אמת, דרך Vorino Bridge)')
-    .addStringOption((o) => o.setName('message').setDescription('תוכן ההודעה שתישלח לכל השחקנים').setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName('addstaff')
@@ -1764,124 +1662,26 @@ async function handleSlashCommand(interaction) {
       break;
     }
 
-    case 'player-info': {
-      const query = options.getString('query');
-      await interaction.deferReply();
-
-      const status = await getFiveMStatus();
-      const livePlayer = status.online ? findPlayerInList(status.players, query) : null;
-      const dbPlayer = await fetchPlayerFromDatabase(query);
-
-      if (!livePlayer && !dbPlayer) {
-        return interaction.editReply({
-          embeds: [errorEmbed('שחקן לא נמצא', `לא נמצא שחקן התואם ל: "${query}" — לא באונליין ולא במסד הנתונים.`)],
-        });
-      }
-
-      const e = baseEmbed().setTitle(`🎮 כרטיס שחקן: ${(livePlayer && livePlayer.name) || query}`);
-
-      if (livePlayer) {
-        const discordId = (livePlayer.identifiers || []).find((id) => id.startsWith('discord:'));
-        e.addFields(
-          { name: '📶 סטטוס', value: '```diff\n+ מחובר כעת\n```', inline: false },
-          { name: '🆔 מזהה שרת', value: `${livePlayer.id}`, inline: true },
-          { name: '📡 פינג', value: `${livePlayer.ping}ms`, inline: true },
-          { name: '💬 דיסקורד', value: discordId ? `<@${discordId.split(':')[1]}>` : 'לא מקושר', inline: true }
-        );
-      } else {
-        e.addFields({ name: '📶 סטטוס', value: '```diff\n- לא מחובר כרגע\n```', inline: false });
-      }
-
-      if (dbPlayer) {
-        // מציג את כל השדות שהשרת החזיר בפועל מטבלת Gamers, פרט לשדות רגישים
-        // (סיסמאות/טוקנים/כתובות IP) שמסוננים תמיד כבסיס בטיחות.
-        const blacklist = ['password', 'pass', 'token', 'secret', 'hwid', 'ip'];
-        const dbLines = Object.entries(dbPlayer)
-          .filter(([key, val]) => val !== null && val !== undefined && !blacklist.some((b) => key.toLowerCase().includes(b)))
-          .slice(0, 20)
-          .map(([key, val]) => `**${key}:** ${val}`);
-        if (dbLines.length) {
-          e.addFields({ name: '🗄️ נתוני מסד הנתונים (Gamers)', value: dbLines.join('\n').slice(0, 1024) });
-        }
-      } else {
-        e.addFields({ name: '🗄️ מסד נתונים', value: 'לא נמצאו נתונים במסד הנתונים עבור חיפוש זה (או שהגשר לשרת לא הגיב).' });
-      }
-
-      await interaction.editReply({ embeds: [e] });
-      break;
-    }
-
     case 'server-players': {
       await interaction.deferReply();
       const status = await getFiveMStatus();
       if (!status.online) {
-        return interaction.editReply({ embeds: [errorEmbed('השרת לא מחובר', 'לא ניתן להתחבר לשרת ה-FiveM כרגע.')] });
+        return interaction.editReply({
+          embeds: [
+            errorEmbed(
+              'השרת לא מחובר',
+              'לא ניתן להתחבר לשרת ה-FiveM כרגע. אם השרת בפועל פעיל, ראו את הלוגים של הבוט (Render) לפרטי השגיאה המדויקים — לרוב זו חסימת אנטי-DDoS על תעבורה נכנסת, ומומלץ להתקין את משאב ה-heartbeat (vorino_status).'
+            ),
+          ],
+        });
       }
       if (!status.players.length) {
         return interaction.editReply({ embeds: [infoEmbed('אין שחקנים', 'אין כרגע שחקנים מחוברים לשרת.')] });
       }
-      const list = status.players.slice(0, 30).map((p) => `**${p.id}.** ${p.name} — ${p.ping}ms`).join('\n');
+      const list = status.players.slice(0, 30).map((p) => `**${p.id}.** ${p.name}${p.ping !== undefined ? ` — ${p.ping}ms` : ''}`).join('\n');
       await interaction.editReply({
         embeds: [infoEmbed(`👥 שחקנים מחוברים (${status.count}/${status.max})`, list)],
       });
-      break;
-    }
-
-    case 'server-kick': {
-      if (!hasStaffRole(member)) return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לבצע פקודה זו.')], ephemeral: true });
-      const serverId = options.getInteger('server_id');
-      const reason = options.getString('reason') || 'לא צוינה סיבה';
-      await interaction.deferReply();
-      try {
-        await bridgeKickPlayer(serverId, reason);
-        await interaction.editReply({ embeds: [successEmbed('🚨 שחקן סולק מהשרת', `שחקן במזהה **${serverId}** סולק מהשרת בזמן אמת.\n**סיבה:** ${reason}`)] });
-        await sendLog(guild, warningEmbed('🚨 קיק משרת FiveM', `**מזהה שחקן:** ${serverId}\n**מפעיל:** ${interaction.user}\n**סיבה:** ${reason}`), 'modLogsChannelId');
-      } catch (err) {
-        await interaction.editReply({ embeds: [errorEmbed('שגיאה בביצוע הקיק', err.message)] });
-      }
-      break;
-    }
-
-    case 'server-ban': {
-      if (!hasStaffRole(member)) return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לבצע פקודה זו.')], ephemeral: true });
-      const serverId = options.getInteger('server_id');
-      const reason = options.getString('reason');
-      await interaction.deferReply();
-      try {
-        await bridgeBanPlayer(serverId, reason);
-        await interaction.editReply({ embeds: [successEmbed('🚨 שחקן נחסם בשרת', `שחקן במזהה **${serverId}** נחסם בשרת בזמן אמת.\n**סיבה:** ${reason}`)] });
-        await sendLog(guild, errorEmbed('🚨 באן משרת FiveM', `**מזהה שחקן:** ${serverId}\n**מפעיל:** ${interaction.user}\n**סיבה:** ${reason}`), 'modLogsChannelId');
-      } catch (err) {
-        await interaction.editReply({ embeds: [errorEmbed('שגיאה בביצוע החסימה', err.message)] });
-      }
-      break;
-    }
-
-    case 'server-unban': {
-      if (!hasStaffRole(member)) return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לבצע פקודה זו.')], ephemeral: true });
-      const identifier = options.getString('identifier');
-      await interaction.deferReply();
-      try {
-        await bridgeUnbanPlayer(identifier);
-        await interaction.editReply({ embeds: [successEmbed('✅ החסימה הוסרה בשרת', `הוסרה חסימה עבור **${identifier}**.`)] });
-        await sendLog(guild, successEmbed('✅ הסרת באן משרת FiveM', `**זיהוי:** ${identifier}\n**מפעיל:** ${interaction.user}`), 'modLogsChannelId');
-      } catch (err) {
-        await interaction.editReply({ embeds: [errorEmbed('שגיאה בהסרת החסימה', err.message)] });
-      }
-      break;
-    }
-
-    case 'server-message': {
-      if (!hasStaffRole(member)) return interaction.reply({ embeds: [errorEmbed('אין הרשאה', 'אין לך הרשאה לבצע פקודה זו.')], ephemeral: true });
-      const msgText = options.getString('message');
-      await interaction.deferReply();
-      try {
-        await bridgeBroadcastMessage(msgText);
-        await interaction.editReply({ embeds: [successEmbed('📢 ההודעה שודרה', `ההודעה נשלחה לכלל השחקנים המחוברים בשרת:\n\n> ${msgText}`)] });
-        await sendLog(guild, infoEmbed('📢 שידור הודעה לשרת FiveM', `**תוכן:** ${msgText}\n**מפעיל:** ${interaction.user}`));
-      } catch (err) {
-        await interaction.editReply({ embeds: [errorEmbed('שגיאה בשידור ההודעה', err.message)] });
-      }
       break;
     }
 
@@ -2313,8 +2113,8 @@ async function checkBotPermissions(guild) {
     }
   }
 
-  if (!config.bridge.secret) {
-    console.warn('⚠️ VORINO_BRIDGE_SECRET לא הוגדר — פקודות server-kick / server-ban / server-unban / server-message ו-/player-info (חלק ה-SQL), וכן ה-heartbeat של הסטטוס, לא יעבדו עד שתגדירו אותו (ואת אותה סיסמה בדיוק גם בצד ה-Lua).');
+  if (!process.env.VORINO_BRIDGE_SECRET) {
+    console.warn('⚠️ VORINO_BRIDGE_SECRET לא הוגדר — מנגנון ה-heartbeat (משאב vorino_status בשרת) לא יוכל לאמת את עצמו מול הבוט, וסטטוס השרת יסתמך רק על שליפה ישירה מול IP:PORT (שבדרך כלל חסומה ע"י אנטי-DDoS). מומלץ להגדיר VORINO_BRIDGE_SECRET באותה ערך גם בבוט וגם במשאב ה-Lua.');
   }
 
   if (warnLines.length) {
